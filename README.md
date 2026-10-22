@@ -122,3 +122,35 @@ make installcheck PGHOST=/tmp PGPORT=5499 PGUSER=postgres
 - `time_bucket_ns(width nanointerval, ts [, origin])`：兩種型別都有，回傳與輸入相同的型別。預設 origin 是 1970-01-01 UTC，向下取整（1970 年以前也正確）。width ≤ 0 會報錯。**若桶起點低於型別最小值，會夾到最小值**（例如 nt8 在 1677-09-21 那一天）。
 - `date_trunc(text, ts [, zone])`：µs 以上的單位交給 PG 的 timestamptz_trunc；`'nanosecond'` 則原值回傳。
 - `extract_ns(text, ts|nanointerval) → numeric`（`EXTRACT(... FROM ...)` 語法在 PG 中寫死，無法擴充）：epoch 精確到 9 位小數；nanosecond、microsecond、millisecond、second 都含奈秒；其他欄位交給 PG 處理。nanointerval 支援 epoch、day、hour、minute 與秒以下的欄位。
+
+### nanotimestamp（不含時區）
+- 16 bytes `{int64 sec, int64 nsec}`，與 nanotimestamptz 共用程式碼。sec 是 1970-01-01 00:00:00 起算的牆上時間秒數（不含時區），語意與 PG `timestamp` 相同。範圍等同 timestamp。
+- text I/O 會忽略輸入中的時區（`'...+05'` 直接取牆上時間），輸出沒有時區後綴；IMMUTABLE。
+- 比較、min/max、B-tree、hash、BRIN minmax。
+- 轉型（context 與核心的 timestamp/timestamptz 相同）：
+  - `timestamp → nanotimestamp` IMPLICIT；反向是 ASSIGNMENT，floor 到 µs。
+  - `date → nanotimestamp` IMPLICIT；反向是 ASSIGNMENT。`date ↔ nanotimestamptz` 也有，都是 ASSIGNMENT。
+  - `nanotimestamp → nanotimestamptz` IMPLICIT；反向是 ASSIGNMENT。兩者都依 session 時區換算（DST 的 gap 和 overlap 處理和核心相同），µs 以下的位數保留。
+  - `bigint ↔ nanotimestamp` 只能明確轉型（牆上時間 ns）。
+- `AT TIME ZONE`：這個語法在 PG 中寫死為 `pg_catalog.timezone`，擴充套件無法支援。請改用 `timezone(zone, nanotimestamp) → nanotimestamptz` 與 `timezone(zone, nanotimestamptz) → nanotimestamp`，結果與核心一致。
+- 算術：`ts − ts`、`ts ± nanointerval`、`ts ± interval`（純日曆運算，不受時區與 DST 影響，IMMUTABLE）、`time_bucket_ns`、`date_trunc`（沒有 zone 參數）、`extract_ns`。
+
+**為什麼沒有 8 B 不含時區版本**：8 B 型別存在的理由，是 TimescaleDB 維度和 bigint 二進位相容，加上大量 tick 資料。這些資料都是絕對時刻，應該存 `nanotimestamptz8`。不含時區的牆上時間多半是排程、本地事件，量小，而且需要 1677–2262 以外的範圍。每多一個型別，轉型與運算子的組合就會成倍增加，候選函式也更容易產生歧義。真的需要時，可以用 `nanotimestamptz8` 搭配 `timezone('UTC', …)`。
+
+## 遷移工具
+- `nanotime_migration_expr(src regtype, target regtype, col name) → text`：產生 `ALTER TABLE ... USING` 的運算式。
+  - timestamp9 經由它自己的二進位 bigint 轉型 `col::bigint::nanotimestamptz`。pg_nanotime 不依賴 timestamp9，只是欄位存在時 timestamp9 必須已安裝。
+  - bigint ns 會直接轉成 nanotimestamptz8，不做任何換算。
+  - timestamptz、timestamp、date 是精確轉換（µs × 1000）；跨越有無時區時，依 session 時區。
+- `CALL nanotime_migrate_column(tbl, col, target DEFAULT 'nanotimestamptz', new_default DEFAULT NULL, dry_run DEFAULT false)`：
+  - 用一個 `ALTER TABLE ... TYPE ... USING` 完成。PG 會在同一個陳述式中，用新型別的預設 opclass 重建該欄位的 B-tree、hash、BRIN、unique 索引，失敗時整個回滾。
+  - 舊的預設值如果無法轉換（例如 timestamp9 常數），會報錯並提示用 `new_default => 'clock_ns()'`。
+  - 有 view 或 rule 依賴該欄位時，ALTER 會失敗（PG 的限制）。
+  - `dry_run` 只印出 SQL 和會重建的索引。
+- 手動寫法：`ALTER TABLE t ALTER COLUMN c TYPE nanotimestamptz USING c::bigint::nanotimestamptz;`（timestamp9），或 `USING c::nanotimestamptz8`（bigint ns）。
+- **timestamp9 繞回損毀**：timestamp9 會把超出範圍的輸入靜默繞回，例如 1500-01-01 變成 2084-07-20 23:34:33.709551616。繞回後仍是合法時刻，**無法可靠偵測**。`nanotime_suspect_count(tbl, col, lo, hi)` 只能統計落在你預期時間窗 [lo, hi) 之外的列數，預設窗是 1990–2100。窗要依照資料實際的時間跨度來設，越窄越有用。
+- 實測（PG 18.6、timestamp9 1.4.0，2026-10-23）：
+  - 20 萬 + 4 列，含 1677/2262 兩端、1969 與 1500 的繞回值，3 個索引，約 0.5 秒完成。
+  - 200004/200004 列的 ns 值與文字輸出完全相同。
+  - 預設窗只抓到 3 列（1677、1969、2262），抓不到 2084 的繞回值，正好說明它的限制。
+  - 回歸測試用一個名為 timestamp9 的 bigint domain 模擬，因為 PG 17 上沒有安裝 timestamp9。

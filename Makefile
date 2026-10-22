@@ -2,7 +2,7 @@ EXTENSION  = pg_nanotime
 MODULE_big = pg_nanotime
 OBJS       = src/pg_nanotime.o
 DATA       = sql/pg_nanotime--0.1.0.sql
-REGRESS    = basic io casts clocks index compact interval arith bucket
+REGRESS    = basic io casts clocks index compact interval arith bucket notz migrate
 REGRESS_OPTS = --inputdir=test --outputdir=test
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)

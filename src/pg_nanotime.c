@@ -146,8 +146,10 @@ nt_to_pg_us(const NanoTimestamp *t)
  * PostgreSQL (time zones, BC, DateStyle all behave as for timestamptz),
  * then the nanoseconds are added back.
  */
+static NanoTimestamp *ntl_from_pg_us(Timestamp us, int64 extra_ns);
+
 static NanoTimestamp *
-nt_parse(const char *str)
+nt_parse_ex(const char *str, bool notz)
 {
 	char	   *buf = pstrdup(str);
 	char	   *p;
@@ -189,11 +191,17 @@ nt_parse(const char *str)
 	}
 	(void) found;
 
-	us = DatumGetTimestampTz(DirectFunctionCall3(timestamptz_in,
+	us = DatumGetTimestampTz(DirectFunctionCall3(notz ? timestamp_in : timestamptz_in,
 												 CStringGetDatum(buf),
 												 ObjectIdGetDatum(InvalidOid),
 												 Int32GetDatum(-1)));
-	return nt_from_pg_us(us, frac_ns);
+	return notz ? ntl_from_pg_us(us, frac_ns) : nt_from_pg_us(us, frac_ns);
+}
+
+static NanoTimestamp *
+nt_parse(const char *str)
+{
+	return nt_parse_ex(str, false);
 }
 
 PG_FUNCTION_INFO_V1(nanotimestamptz_in);
@@ -226,8 +234,16 @@ append_tz(char *out, int tz)
 		sprintf(out, "%c%02d", sign, h);
 }
 
+static char *nt_format_ex(const NanoTimestamp *t, bool notz);
+
 static char *
 nt_format(const NanoTimestamp *t)
+{
+	return nt_format_ex(t, false);
+}
+
+static char *
+nt_format_ex(const NanoTimestamp *t, bool notz)
 {
 	TimestampTz whole = (t->sec - PG_UNIX_EPOCH_DIFF_SECS) * USECS_PER_SEC;
 	struct pg_tm tm;
@@ -237,11 +253,14 @@ nt_format(const NanoTimestamp *t)
 	char		tzbuf[16];
 	int			year;
 
-	if (timestamp2tm(whole, &tz, &tm, &fsec, &tzn, NULL) != 0)
+	if (timestamp2tm(whole, notz ? NULL : &tz, &tm, &fsec, notz ? NULL : &tzn, NULL) != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-				 errmsg("nanotimestamptz out of range")));
-	append_tz(tzbuf, tz);
+				 errmsg("%s out of range", notz ? "nanotimestamp" : "nanotimestamptz")));
+	if (notz)
+		tzbuf[0] = '\0';
+	else
+		append_tz(tzbuf, tz);
 	year = tm.tm_year > 0 ? tm.tm_year : -(tm.tm_year - 1);
 	return psprintf("%04d-%02d-%02d %02d:%02d:%02d.%09lld%s%s",
 							   year, tm.tm_mon, tm.tm_mday,
@@ -1484,4 +1503,286 @@ nanointerval_extract(PG_FUNCTION_ARGS)
 		return neg ? DirectFunctionCall1(numeric_uminus, r) : r;
 	}
 	return numeric_from_cstring(int128_to_cstring(neg ? -out : out));
+}
+
+/* ===================== nanotimestamp (without time zone) ================== */
+/*
+ * Same 16-byte layout as nanotimestamptz; sec counts wall-clock seconds from
+ * 1970-01-01 00:00:00 (no zone), exactly as PostgreSQL's timestamp stores
+ * wall-clock microseconds. Comparison, hashing, send and ts - ts reuse the
+ * nanotimestamptz C functions (identical math). Range equals timestamp.
+ */
+
+static void
+ntl_check_total(int128 v)
+{
+	if (v < NT_MIN_TOTAL || v > NT_MAX_TOTAL)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("nanotimestamp out of range")));
+}
+
+static NanoTimestamp *
+ntl_from_total(int128 v)
+{
+	ntl_check_total(v);
+	return nt_from_total(v);
+}
+
+/* Timestamp (wall-clock us since 2000) -> nanotimestamp */
+static NanoTimestamp *
+ntl_from_pg_us(Timestamp us, int64 extra_ns)
+{
+	if (TIMESTAMP_NOT_FINITE(us))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("infinite timestamps are not supported by nanotimestamp")));
+	return ntl_from_total(((int128) us + (int128) PG_UNIX_EPOCH_DIFF_SECS * USECS_PER_SEC) * NS_PER_USEC + extra_ns);
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_in);
+Datum
+nanotimestamp_in(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(nt_parse_ex(PG_GETARG_CSTRING(0), true));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_out);
+Datum
+nanotimestamp_out(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_CSTRING(nt_format_ex(PG_GETARG_NT(0), true));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_recv);
+Datum
+nanotimestamp_recv(PG_FUNCTION_ARGS)
+{
+	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
+	int64		sec = pq_getmsgint64(buf);
+	int64		nsec = pq_getmsgint64(buf);
+
+	if (nsec < 0 || nsec >= NS_PER_SEC)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
+				 errmsg("invalid nanoseconds in external nanotimestamp value")));
+	if (sec < NT_MIN_SEC || sec >= NT_END_SEC)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("nanotimestamp out of range")));
+	PG_RETURN_POINTER(nt_make(sec, nsec));
+}
+
+/* casts */
+PG_FUNCTION_INFO_V1(nanotimestamp_from_timestamp);
+Datum
+nanotimestamp_from_timestamp(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(ntl_from_pg_us(PG_GETARG_TIMESTAMP(0), 0));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_to_timestamp);
+Datum
+nanotimestamp_to_timestamp(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_TIMESTAMP(nt_to_pg_us(PG_GETARG_NT(0)));	/* floor to us */
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_from_date);
+Datum
+nanotimestamp_from_date(PG_FUNCTION_ARGS)
+{
+	Timestamp	us = DatumGetTimestamp(DirectFunctionCall1(date_timestamp, PG_GETARG_DATUM(0)));
+
+	PG_RETURN_POINTER(ntl_from_pg_us(us, 0));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_to_date);
+Datum
+nanotimestamp_to_date(PG_FUNCTION_ARGS)
+{
+	return DirectFunctionCall1(timestamp_date, TimestampGetDatum(nt_to_pg_us(PG_GETARG_NT(0))));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz_to_date);
+Datum
+nanotimestamptz_to_date(PG_FUNCTION_ARGS)
+{
+	return DirectFunctionCall1(timestamptz_date, TimestampTzGetDatum(nt_to_pg_us(PG_GETARG_NT(0))));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz_from_date);
+Datum
+nanotimestamptz_from_date(PG_FUNCTION_ARGS)
+{
+	TimestampTz us = DatumGetTimestampTz(DirectFunctionCall1(date_timestamptz, PG_GETARG_DATUM(0)));
+
+	PG_RETURN_POINTER(nt_from_pg_us(us, 0));
+}
+
+/*
+ * nanotimestamp <-> nanotimestamptz through the session time zone. Zone
+ * offsets are whole seconds, so the sub-microsecond part carries over.
+ */
+PG_FUNCTION_INFO_V1(nanotimestamp_to_nanotimestamptz);
+Datum
+nanotimestamp_to_nanotimestamptz(PG_FUNCTION_ARGS)
+{
+	NanoTimestamp *t = PG_GETARG_NT(0);
+	TimestampTz r = DatumGetTimestampTz(DirectFunctionCall1(timestamp_timestamptz,
+															 TimestampGetDatum(nt_to_pg_us(t))));
+
+	PG_RETURN_POINTER(nt_from_pg_us(r, t->nsec % NS_PER_USEC));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz_to_nanotimestamp);
+Datum
+nanotimestamptz_to_nanotimestamp(PG_FUNCTION_ARGS)
+{
+	NanoTimestamp *t = PG_GETARG_NT(0);
+	Timestamp	r = DatumGetTimestamp(DirectFunctionCall1(timestamptz_timestamp,
+														  TimestampTzGetDatum(nt_to_pg_us(t))));
+
+	PG_RETURN_POINTER(ntl_from_pg_us(r, t->nsec % NS_PER_USEC));
+}
+
+/* AT TIME ZONE equivalents: timezone(zone, nanotimestamp) -> nanotimestamptz and back */
+PG_FUNCTION_INFO_V1(nanotimestamp_zone);
+Datum
+nanotimestamp_zone(PG_FUNCTION_ARGS)
+{
+	NanoTimestamp *t = PG_GETARG_NT(1);
+	TimestampTz r = DatumGetTimestampTz(DirectFunctionCall2(timestamp_zone, PG_GETARG_DATUM(0),
+															 TimestampGetDatum(nt_to_pg_us(t))));
+
+	PG_RETURN_POINTER(nt_from_pg_us(r, t->nsec % NS_PER_USEC));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz_zone);
+Datum
+nanotimestamptz_zone(PG_FUNCTION_ARGS)
+{
+	NanoTimestamp *t = PG_GETARG_NT(1);
+	Timestamp	r = DatumGetTimestamp(DirectFunctionCall2(timestamptz_zone, PG_GETARG_DATUM(0),
+														  TimestampTzGetDatum(nt_to_pg_us(t))));
+
+	PG_RETURN_POINTER(ntl_from_pg_us(r, t->nsec % NS_PER_USEC));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_from_int8);
+Datum
+nanotimestamp_from_int8(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(ntl_from_total(PG_GETARG_INT64(0)));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_to_int8);
+Datum
+nanotimestamp_to_int8(PG_FUNCTION_ARGS)
+{
+	int128		v = nt_total(PG_GETARG_NT(0));
+
+	if (v < PG_INT64_MIN || v > PG_INT64_MAX)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("nanotimestamp out of range for bigint")));
+	PG_RETURN_INT64((int64) v);
+}
+
+/* arithmetic */
+PG_FUNCTION_INFO_V1(nanotimestamp_pl_nanointerval);
+Datum
+nanotimestamp_pl_nanointerval(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(ntl_from_total(nt_total(PG_GETARG_NT(0)) + nt_total(PG_GETARG_NI(1))));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_mi_nanointerval);
+Datum
+nanotimestamp_mi_nanointerval(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(ntl_from_total(nt_total(PG_GETARG_NT(0)) - nt_total(PG_GETARG_NI(1))));
+}
+
+PG_FUNCTION_INFO_V1(nanointerval_pl_nanotimestamp);
+Datum
+nanointerval_pl_nanotimestamp(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(ntl_from_total(nt_total(PG_GETARG_NT(1)) + nt_total(PG_GETARG_NI(0))));
+}
+
+static NanoTimestamp *
+ntl_interval_op(const NanoTimestamp *t, Interval *iv, bool minus)
+{
+	Timestamp	r = DatumGetTimestamp(DirectFunctionCall2(minus ? timestamp_mi_interval : timestamp_pl_interval,
+														  TimestampGetDatum(nt_to_pg_us(t)), IntervalPGetDatum(iv)));
+
+	return ntl_from_pg_us(r, t->nsec % NS_PER_USEC);
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_pl_interval);
+Datum
+nanotimestamp_pl_interval(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(ntl_interval_op(PG_GETARG_NT(0), PG_GETARG_INTERVAL_P(1), false));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_mi_interval);
+Datum
+nanotimestamp_mi_interval(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(ntl_interval_op(PG_GETARG_NT(0), PG_GETARG_INTERVAL_P(1), true));
+}
+
+PG_FUNCTION_INFO_V1(interval_pl_nanotimestamp);
+Datum
+interval_pl_nanotimestamp(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(ntl_interval_op(PG_GETARG_NT(1), PG_GETARG_INTERVAL_P(0), false));
+}
+
+PG_FUNCTION_INFO_V1(time_bucket_ns_notz);
+Datum
+time_bucket_ns_notz(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(ntl_from_total(bucket128(nt_total(PG_GETARG_NI(0)), nt_total(PG_GETARG_NT(1)),
+											   nt_total(PG_GETARG_NT(2)), NT_MIN_TOTAL)));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_trunc);
+Datum
+nanotimestamp_trunc(PG_FUNCTION_ARGS)
+{
+	text	   *unit = PG_GETARG_TEXT_PP(0);
+	NanoTimestamp *t = PG_GETARG_NT(1);
+	Timestamp	r;
+
+	if (is_ns_unit(unit))
+		PG_RETURN_POINTER(nt_make(t->sec, t->nsec));
+	r = DatumGetTimestamp(DirectFunctionCall2(timestamp_trunc, PointerGetDatum(unit),
+											  TimestampGetDatum(nt_to_pg_us(t))));
+	PG_RETURN_POINTER(ntl_from_pg_us(r, 0));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_extract);
+Datum
+nanotimestamp_extract(PG_FUNCTION_ARGS)
+{
+	text	   *field = PG_GETARG_TEXT_PP(0);
+	NanoTimestamp *t = PG_GETARG_NT(1);
+	char	   *f = text_to_cstring(field);
+	bool		handled;
+	Datum		r;
+	struct pg_tm tm;
+	fsec_t		fsec;
+
+	if (!pg_strcasecmp(f, "epoch"))
+		return numeric_from_cstring(fixed9(nt_total(t)));
+	if (timestamp2tm((t->sec - PG_UNIX_EPOCH_DIFF_SECS) * USECS_PER_SEC, NULL, &tm, &fsec, NULL, NULL) != 0)
+		ereport(ERROR, (errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE), errmsg("nanotimestamp out of range")));
+	r = sub_minute_field(f, tm.tm_sec, t->nsec, &handled);
+	if (handled)
+		return r;
+	return DirectFunctionCall2(extract_timestamp, PointerGetDatum(field),
+							   TimestampGetDatum(nt_to_pg_us(t)));
 }

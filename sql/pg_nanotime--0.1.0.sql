@@ -270,3 +270,208 @@ CREATE FUNCTION date_trunc(text, nanotimestamptz8, text) RETURNS nanotimestamptz
 -- EXTRACT(... FROM ...) syntax is hard-wired to pg_catalog.extract, so these are named extract_ns
 CREATE FUNCTION extract_ns(text, nanotimestamptz) RETURNS numeric AS 'MODULE_PATHNAME', 'nanotimestamptz_extract' LANGUAGE C STABLE STRICT PARALLEL SAFE;
 CREATE FUNCTION extract_ns(text, nanointerval) RETURNS numeric AS 'MODULE_PATHNAME', 'nanointerval_extract' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+-- ===================== nanotimestamp: without time zone =====================
+-- Same 16-byte layout as nanotimestamptz; sec = wall-clock seconds from
+-- 1970-01-01 00:00:00 with no zone (like PostgreSQL timestamp). Comparison,
+-- hashing, binary send and ts - ts reuse the nanotimestamptz C functions.
+CREATE TYPE nanotimestamp;
+CREATE FUNCTION nanotimestamp_in(cstring) RETURNS nanotimestamp AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamp_out(nanotimestamp) RETURNS cstring AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamp_recv(internal) RETURNS nanotimestamp AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamp_send(nanotimestamp) RETURNS bytea AS 'MODULE_PATHNAME', 'nanotimestamptz_send' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE TYPE nanotimestamp (
+  INPUT = nanotimestamp_in, OUTPUT = nanotimestamp_out,
+  RECEIVE = nanotimestamp_recv, SEND = nanotimestamp_send,
+  INTERNALLENGTH = 16, ALIGNMENT = double, STORAGE = plain
+);
+COMMENT ON TYPE nanotimestamp IS 'timestamp without time zone, nanosecond precision, 16 bytes';
+
+CREATE FUNCTION nanotimestamp_lt(nanotimestamp, nanotimestamp) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_lt' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanotimestamp_le(nanotimestamp, nanotimestamp) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_le' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanotimestamp_eq(nanotimestamp, nanotimestamp) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_eq' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanotimestamp_ne(nanotimestamp, nanotimestamp) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_ne' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanotimestamp_ge(nanotimestamp, nanotimestamp) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_ge' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanotimestamp_gt(nanotimestamp, nanotimestamp) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_gt' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanotimestamp_cmp(nanotimestamp, nanotimestamp) RETURNS int4 AS 'MODULE_PATHNAME', 'nanotimestamptz_cmp' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanotimestamp_hash(nanotimestamp) RETURNS int4 AS 'MODULE_PATHNAME', 'nanotimestamptz_hash' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanotimestamp_larger(nanotimestamp, nanotimestamp) RETURNS nanotimestamp AS 'MODULE_PATHNAME', 'nanotimestamptz_larger' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamp_smaller(nanotimestamp, nanotimestamp) RETURNS nanotimestamp AS 'MODULE_PATHNAME', 'nanotimestamptz_smaller' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR <  (LEFTARG = nanotimestamp, RIGHTARG = nanotimestamp, PROCEDURE = nanotimestamp_lt, COMMUTATOR = >,  NEGATOR = >=, RESTRICT = scalarltsel, JOIN = scalarltjoinsel);
+CREATE OPERATOR <= (LEFTARG = nanotimestamp, RIGHTARG = nanotimestamp, PROCEDURE = nanotimestamp_le, COMMUTATOR = >=, NEGATOR = >,  RESTRICT = scalarlesel, JOIN = scalarlejoinsel);
+CREATE OPERATOR =  (LEFTARG = nanotimestamp, RIGHTARG = nanotimestamp, PROCEDURE = nanotimestamp_eq, COMMUTATOR = =,  NEGATOR = <>, RESTRICT = eqsel, JOIN = eqjoinsel, HASHES, MERGES);
+CREATE OPERATOR <> (LEFTARG = nanotimestamp, RIGHTARG = nanotimestamp, PROCEDURE = nanotimestamp_ne, COMMUTATOR = <>, NEGATOR = =,  RESTRICT = neqsel, JOIN = neqjoinsel);
+CREATE OPERATOR >= (LEFTARG = nanotimestamp, RIGHTARG = nanotimestamp, PROCEDURE = nanotimestamp_ge, COMMUTATOR = <=, NEGATOR = <,  RESTRICT = scalargesel, JOIN = scalargejoinsel);
+CREATE OPERATOR >  (LEFTARG = nanotimestamp, RIGHTARG = nanotimestamp, PROCEDURE = nanotimestamp_gt, COMMUTATOR = <,  NEGATOR = <=, RESTRICT = scalargtsel, JOIN = scalargtjoinsel);
+
+CREATE OPERATOR CLASS nanotimestamp_btree_ops DEFAULT FOR TYPE nanotimestamp USING btree AS
+  OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >,
+  FUNCTION 1 nanotimestamp_cmp(nanotimestamp, nanotimestamp);
+CREATE OPERATOR CLASS nanotimestamp_hash_ops DEFAULT FOR TYPE nanotimestamp USING hash AS
+  OPERATOR 1 =, FUNCTION 1 nanotimestamp_hash(nanotimestamp);
+CREATE OPERATOR CLASS nanotimestamp_minmax_ops DEFAULT FOR TYPE nanotimestamp USING brin AS
+  OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >,
+  FUNCTION 1 brin_minmax_opcinfo(internal), FUNCTION 2 brin_minmax_add_value(internal, internal, internal, internal),
+  FUNCTION 3 brin_minmax_consistent(internal, internal, internal), FUNCTION 4 brin_minmax_union(internal, internal, internal);
+
+CREATE AGGREGATE min(nanotimestamp) (SFUNC = nanotimestamp_smaller, STYPE = nanotimestamp, SORTOP = <, COMBINEFUNC = nanotimestamp_smaller, PARALLEL = SAFE);
+CREATE AGGREGATE max(nanotimestamp) (SFUNC = nanotimestamp_larger, STYPE = nanotimestamp, SORTOP = >, COMBINEFUNC = nanotimestamp_larger, PARALLEL = SAFE);
+
+-- casts (contexts mirror timestamp / timestamptz in core)
+CREATE FUNCTION nanotimestamp(timestamp) RETURNS nanotimestamp AS 'MODULE_PATHNAME', 'nanotimestamp_from_timestamp' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION "timestamp"(nanotimestamp) RETURNS timestamp AS 'MODULE_PATHNAME', 'nanotimestamp_to_timestamp' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamp(date) RETURNS nanotimestamp AS 'MODULE_PATHNAME', 'nanotimestamp_from_date' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION date(nanotimestamp) RETURNS date AS 'MODULE_PATHNAME', 'nanotimestamp_to_date' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamptz(date) RETURNS nanotimestamptz AS 'MODULE_PATHNAME', 'nanotimestamptz_from_date' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION date(nanotimestamptz) RETURNS date AS 'MODULE_PATHNAME', 'nanotimestamptz_to_date' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamptz(nanotimestamp) RETURNS nanotimestamptz AS 'MODULE_PATHNAME', 'nanotimestamp_to_nanotimestamptz' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamp(nanotimestamptz) RETURNS nanotimestamp AS 'MODULE_PATHNAME', 'nanotimestamptz_to_nanotimestamp' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamp(bigint) RETURNS nanotimestamp AS 'MODULE_PATHNAME', 'nanotimestamp_from_int8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION int8(nanotimestamp) RETURNS bigint AS 'MODULE_PATHNAME', 'nanotimestamp_to_int8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE CAST (timestamp AS nanotimestamp) WITH FUNCTION nanotimestamp(timestamp) AS IMPLICIT;
+CREATE CAST (nanotimestamp AS timestamp) WITH FUNCTION "timestamp"(nanotimestamp) AS ASSIGNMENT;
+CREATE CAST (date AS nanotimestamp) WITH FUNCTION nanotimestamp(date) AS IMPLICIT;
+CREATE CAST (nanotimestamp AS date) WITH FUNCTION date(nanotimestamp) AS ASSIGNMENT;
+CREATE CAST (date AS nanotimestamptz) WITH FUNCTION nanotimestamptz(date) AS ASSIGNMENT;
+CREATE CAST (nanotimestamptz AS date) WITH FUNCTION date(nanotimestamptz) AS ASSIGNMENT;
+CREATE CAST (nanotimestamp AS nanotimestamptz) WITH FUNCTION nanotimestamptz(nanotimestamp) AS IMPLICIT;
+CREATE CAST (nanotimestamptz AS nanotimestamp) WITH FUNCTION nanotimestamp(nanotimestamptz) AS ASSIGNMENT;
+CREATE CAST (bigint AS nanotimestamp) WITH FUNCTION nanotimestamp(bigint);
+CREATE CAST (nanotimestamp AS bigint) WITH FUNCTION int8(nanotimestamp);
+
+-- AT TIME ZONE equivalents (the AT TIME ZONE syntax itself is bound to pg_catalog.timezone)
+CREATE FUNCTION timezone(text, nanotimestamp) RETURNS nanotimestamptz AS 'MODULE_PATHNAME', 'nanotimestamp_zone' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION timezone(text, nanotimestamptz) RETURNS nanotimestamp AS 'MODULE_PATHNAME', 'nanotimestamptz_zone' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+-- arithmetic
+CREATE FUNCTION nanotimestamp_mi(nanotimestamp, nanotimestamp) RETURNS nanointerval AS 'MODULE_PATHNAME', 'nanotimestamptz_mi' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamp_pl_nanointerval(nanotimestamp, nanointerval) RETURNS nanotimestamp AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamp_mi_nanointerval(nanotimestamp, nanointerval) RETURNS nanotimestamp AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_pl_nanotimestamp(nanointerval, nanotimestamp) RETURNS nanotimestamp AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamp_pl_interval(nanotimestamp, interval) RETURNS nanotimestamp AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamp_mi_interval(nanotimestamp, interval) RETURNS nanotimestamp AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION interval_pl_nanotimestamp(interval, nanotimestamp) RETURNS nanotimestamp AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE OPERATOR - (LEFTARG = nanotimestamp, RIGHTARG = nanotimestamp, PROCEDURE = nanotimestamp_mi);
+CREATE OPERATOR + (LEFTARG = nanotimestamp, RIGHTARG = nanointerval, PROCEDURE = nanotimestamp_pl_nanointerval, COMMUTATOR = +);
+CREATE OPERATOR + (LEFTARG = nanointerval, RIGHTARG = nanotimestamp, PROCEDURE = nanointerval_pl_nanotimestamp, COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG = nanotimestamp, RIGHTARG = nanointerval, PROCEDURE = nanotimestamp_mi_nanointerval);
+CREATE OPERATOR + (LEFTARG = nanotimestamp, RIGHTARG = interval, PROCEDURE = nanotimestamp_pl_interval, COMMUTATOR = +);
+CREATE OPERATOR + (LEFTARG = interval, RIGHTARG = nanotimestamp, PROCEDURE = interval_pl_nanotimestamp, COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG = nanotimestamp, RIGHTARG = interval, PROCEDURE = nanotimestamp_mi_interval);
+
+CREATE FUNCTION time_bucket_ns(nanointerval, nanotimestamp, nanotimestamp DEFAULT '1970-01-01 00:00:00')
+  RETURNS nanotimestamp AS 'MODULE_PATHNAME', 'time_bucket_ns_notz' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION date_trunc(text, nanotimestamp) RETURNS nanotimestamp AS 'MODULE_PATHNAME', 'nanotimestamp_trunc' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION extract_ns(text, nanotimestamp) RETURNS numeric AS 'MODULE_PATHNAME', 'nanotimestamp_extract' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+-- ============================ migration helpers ============================
+-- Expression that converts column "col" of type src to type target.
+--   timestamp9 : via its own binary bigint cast (ns since 1970 UTC); the
+--                timestamp9 extension is only needed because the column exists.
+--   bigint     : nanoseconds since 1970-01-01 UTC.
+--   timestamptz/timestamp/date: exact (x 1000), session time zone where PG would use it.
+CREATE FUNCTION nanotime_migration_expr(src regtype, target regtype, col name) RETURNS text
+LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  s text := format_type(src, NULL);
+  t text := format_type(target, NULL);
+  c text := quote_ident(col);
+  base text;
+  base_tz bool;  -- base expression is nanotimestamptz (true) or nanotimestamp (false)
+BEGIN
+  IF t NOT IN ('nanotimestamptz', 'nanotimestamptz8', 'nanotimestamp') THEN
+    RAISE EXCEPTION 'target type must be nanotimestamptz, nanotimestamptz8 or nanotimestamp, not %', t;
+  END IF;
+  CASE
+    WHEN s = 'timestamp9' THEN base := format('(%s)::bigint::nanotimestamptz', c); base_tz := true;
+    WHEN s = 'bigint' THEN base := format('(%s)::nanotimestamptz', c); base_tz := true;
+    WHEN s = 'timestamp with time zone' THEN base := format('(%s)::nanotimestamptz', c); base_tz := true;
+    WHEN s IN ('timestamp without time zone', 'date') THEN base := format('(%s)::nanotimestamp', c); base_tz := false;
+    WHEN s IN ('nanotimestamptz', 'nanotimestamptz8') THEN base := format('(%s)::nanotimestamptz', c); base_tz := true;
+    WHEN s = 'nanotimestamp' THEN base := c; base_tz := false;
+    ELSE RAISE EXCEPTION 'cannot migrate a column of type % with pg_nanotime', s;
+  END CASE;
+  IF s = 'bigint' AND t = 'nanotimestamptz8' THEN
+    RETURN format('(%s)::nanotimestamptz8', c);   -- binary-compatible, no conversion
+  ELSIF s = 'timestamp9' AND t = 'nanotimestamptz8' THEN
+    RETURN format('(%s)::bigint::nanotimestamptz8', c);
+  ELSIF base_tz AND t = 'nanotimestamp' THEN
+    RETURN base || '::nanotimestamp';          -- session time zone, like timestamptz::timestamp
+  ELSIF NOT base_tz AND t = 'nanotimestamptz' THEN
+    RETURN base || '::nanotimestamptz';         -- session time zone, like timestamp::timestamptz
+  ELSIF NOT base_tz AND t = 'nanotimestamptz8' THEN
+    RETURN base || '::nanotimestamptz::nanotimestamptz8';  -- session time zone, like timestamp::timestamptz
+  ELSIF t = 'nanotimestamptz' OR t = 'nanotimestamp' THEN
+    RETURN base;
+  ELSE
+    RETURN base || '::' || t;
+  END IF;
+END $$;
+
+-- Count values outside [lo, hi) after conversion. timestamp9 silently wrapped
+-- out-of-range input around 1677/2262, so a corrupted value is just another
+-- valid instant: this only finds implausible ones, it cannot prove a value is
+-- correct. Pick lo/hi to match the data's real time span.
+CREATE FUNCTION nanotime_suspect_count(tbl regclass, col name,
+    lo nanotimestamptz DEFAULT '1990-01-01 00:00:00+00', hi nanotimestamptz DEFAULT '2100-01-01 00:00:00+00')
+RETURNS bigint LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  src regtype;
+  n bigint;
+BEGIN
+  SELECT atttypid INTO src FROM pg_attribute WHERE attrelid = tbl AND attname = col AND NOT attisdropped;
+  IF src IS NULL THEN RAISE EXCEPTION 'column "%" of relation % does not exist', col, tbl; END IF;
+  EXECUTE format('SELECT count(*) FROM %s WHERE %s NOT BETWEEN $1 AND $2 - ''1 ns''::nanointerval',
+                 tbl, nanotime_migration_expr(src, 'nanotimestamptz', col))
+    INTO n USING lo, hi;
+  RETURN n;
+END $$;
+
+-- Migrate one column in place with ALTER TABLE ... TYPE ... USING. PostgreSQL
+-- rebuilds the column's indexes (B-tree, hash, BRIN, unique, primary key)
+-- with the new type's default operator classes in the same statement. An
+-- existing default is kept if PostgreSQL can cast it (assignment cast);
+-- otherwise pass new_default, which replaces it. Views or rules
+-- that use the column make the ALTER fail (PostgreSQL restriction).
+CREATE PROCEDURE nanotime_migrate_column(tbl regclass, col name,
+    target regtype DEFAULT 'nanotimestamptz', new_default text DEFAULT NULL, dry_run bool DEFAULT false)
+LANGUAGE plpgsql AS $$
+DECLARE
+  src regtype;
+  has_default bool;
+  expr text;
+  stmt text;
+  idx record;
+BEGIN
+  SELECT atttypid, atthasdef INTO src, has_default FROM pg_attribute
+   WHERE attrelid = tbl AND attname = col AND NOT attisdropped AND attnum > 0;
+  IF src IS NULL THEN RAISE EXCEPTION 'column "%" of relation % does not exist', col, tbl; END IF;
+  expr := nanotime_migration_expr(src, target, col);
+  stmt := format('ALTER TABLE %s ALTER COLUMN %I TYPE %s USING %s', tbl, col, format_type(target, NULL), expr);
+  IF new_default IS NOT NULL THEN
+    stmt := format('ALTER TABLE %s ALTER COLUMN %I DROP DEFAULT, ', tbl, col) || substr(stmt, length(format('ALTER TABLE %s ', tbl)) + 1);
+  END IF;
+  IF new_default IS NOT NULL THEN
+    stmt := stmt || format(', ALTER COLUMN %I SET DEFAULT %s', col, new_default);
+  END IF;
+  FOR idx IN SELECT i.indexrelid::regclass AS name FROM pg_index i
+              WHERE i.indrelid = tbl AND (SELECT attnum FROM pg_attribute WHERE attrelid = tbl AND attname = col) = ANY (i.indkey::int2[])
+  LOOP
+    RAISE NOTICE 'index % will be rebuilt', idx.name;
+  END LOOP;
+  IF dry_run THEN
+    RAISE NOTICE '%', stmt;
+    RETURN;
+  END IF;
+  BEGIN
+    EXECUTE stmt;
+  EXCEPTION WHEN datatype_mismatch OR undefined_function THEN
+    IF has_default AND new_default IS NULL THEN
+      RAISE EXCEPTION '%', SQLERRM
+        USING ERRCODE = SQLSTATE, HINT = 'The column default cannot be converted; pass new_default => ''clock_ns()'' (or another expression, or ''NULL'').';
+    END IF;
+    RAISE;
+  END;
+END $$;
