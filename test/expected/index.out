@@ -66,3 +66,24 @@ SELECT count(DISTINCT t) FROM ix;
  10003
 (1 row)
 
+-- BRIN (minmax) on the 16-byte type
+CREATE INDEX ix_brin ON ix USING brin(t);
+DROP INDEX ix_h;
+SET enable_seqscan = off;
+SET enable_bitmapscan = on;
+EXPLAIN (COSTS OFF) SELECT v FROM ix WHERE t >= '1969-12-31 23:00:00 UTC' AND t < '1969-12-31 23:00:01 UTC';
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on ix
+   Recheck Cond: ((t >= '1969-12-31 23:00:00.000000000+00'::nanotimestamptz) AND (t < '1969-12-31 23:00:01.000000000+00'::nanotimestamptz))
+   ->  Bitmap Index Scan on ix_brin
+         Index Cond: ((t >= '1969-12-31 23:00:00.000000000+00'::nanotimestamptz) AND (t < '1969-12-31 23:00:01.000000000+00'::nanotimestamptz))
+(4 rows)
+
+SELECT v FROM ix WHERE t >= '1969-12-31 23:00:00 UTC' AND t < '1969-12-31 23:00:01 UTC';
+  v   
+------
+ 1400
+(1 row)
+
+RESET enable_seqscan;

@@ -19,3 +19,11 @@ RESET enable_seqscan;
 -- hash join / group by
 SELECT count(*) FROM ix a JOIN ix b USING (t);
 SELECT count(DISTINCT t) FROM ix;
+-- BRIN (minmax) on the 16-byte type
+CREATE INDEX ix_brin ON ix USING brin(t);
+DROP INDEX ix_h;
+SET enable_seqscan = off;
+SET enable_bitmapscan = on;
+EXPLAIN (COSTS OFF) SELECT v FROM ix WHERE t >= '1969-12-31 23:00:00 UTC' AND t < '1969-12-31 23:00:01 UTC';
+SELECT v FROM ix WHERE t >= '1969-12-31 23:00:00 UTC' AND t < '1969-12-31 23:00:01 UTC';
+RESET enable_seqscan;

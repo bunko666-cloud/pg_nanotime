@@ -7,6 +7,12 @@
  * Valid range equals PostgreSQL timestamptz: 4713-11-24 BC 00:00:00 UTC
  * up to (but excluding) 294277-01-01 00:00:00 UTC.
  *
+ * nanotimestamptz8: 8 bytes, int64 nanoseconds since 1970 (pass by value),
+ *   range 1677-09-21 00:12:43.145224192 .. 2262-04-11 23:47:16.854775807 UTC.
+ *   Binary-compatible with bigint. Shares parsing/formatting with the 16B type.
+ *
+ * Requires PostgreSQL 17+.
+ *
  * Copyright (c) 2026, pg_nanotime contributors. PostgreSQL License.
  */
 #include "postgres.h"
@@ -26,6 +32,10 @@
 #include "utils/datetime.h"
 #include "utils/timestamp.h"
 
+#if PG_VERSION_NUM < 170000
+#error "pg_nanotime requires PostgreSQL 17 or later"
+#endif
+
 PG_MODULE_MAGIC;
 
 typedef struct NanoTimestamp
@@ -43,11 +53,7 @@ typedef struct NanoTimestamp
 #define NT_MIN_SEC	(MIN_TIMESTAMP / USECS_PER_SEC + PG_UNIX_EPOCH_DIFF_SECS)
 #define NT_END_SEC	(END_TIMESTAMP / USECS_PER_SEC + PG_UNIX_EPOCH_DIFF_SECS)
 
-#if PG_VERSION_NUM >= 170000
 #define MY_LXID (MyProc->vxid.lxid)
-#else
-#define MY_LXID (MyProc->lxid)
-#endif
 
 #define PG_GETARG_NT(n)	((NanoTimestamp *) PG_GETARG_POINTER(n))
 
@@ -135,11 +141,9 @@ nt_to_pg_us(const NanoTimestamp *t)
  * PostgreSQL (time zones, BC, DateStyle all behave as for timestamptz),
  * then the nanoseconds are added back.
  */
-PG_FUNCTION_INFO_V1(nanotimestamptz_in);
-Datum
-nanotimestamptz_in(PG_FUNCTION_ARGS)
+static NanoTimestamp *
+nt_parse(const char *str)
 {
-	char	   *str = PG_GETARG_CSTRING(0);
 	char	   *buf = pstrdup(str);
 	char	   *p;
 	int64		frac_ns = 0;
@@ -184,7 +188,14 @@ nanotimestamptz_in(PG_FUNCTION_ARGS)
 												 CStringGetDatum(buf),
 												 ObjectIdGetDatum(InvalidOid),
 												 Int32GetDatum(-1)));
-	PG_RETURN_POINTER(nt_from_pg_us(us, frac_ns));
+	return nt_from_pg_us(us, frac_ns);
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz_in);
+Datum
+nanotimestamptz_in(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(nt_parse(PG_GETARG_CSTRING(0)));
 }
 
 static void
@@ -210,11 +221,9 @@ append_tz(char *out, int tz)
 		sprintf(out, "%c%02d", sign, h);
 }
 
-PG_FUNCTION_INFO_V1(nanotimestamptz_out);
-Datum
-nanotimestamptz_out(PG_FUNCTION_ARGS)
+static char *
+nt_format(const NanoTimestamp *t)
 {
-	NanoTimestamp *t = PG_GETARG_NT(0);
 	TimestampTz whole = (t->sec - PG_UNIX_EPOCH_DIFF_SECS) * USECS_PER_SEC;
 	struct pg_tm tm;
 	fsec_t		fsec;
@@ -229,11 +238,18 @@ nanotimestamptz_out(PG_FUNCTION_ARGS)
 				 errmsg("nanotimestamptz out of range")));
 	append_tz(tzbuf, tz);
 	year = tm.tm_year > 0 ? tm.tm_year : -(tm.tm_year - 1);
-	PG_RETURN_CSTRING(psprintf("%04d-%02d-%02d %02d:%02d:%02d.%09lld%s%s",
+	return psprintf("%04d-%02d-%02d %02d:%02d:%02d.%09lld%s%s",
 							   year, tm.tm_mon, tm.tm_mday,
 							   tm.tm_hour, tm.tm_min, tm.tm_sec,
 							   (long long) t->nsec, tzbuf,
-							   tm.tm_year > 0 ? "" : " BC"));
+							   tm.tm_year > 0 ? "" : " BC");
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz_out);
+Datum
+nanotimestamptz_out(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_CSTRING(nt_format(PG_GETARG_NT(0)));
 }
 
 /* --------------------------- binary I/O -------------------------------- */
@@ -341,11 +357,9 @@ nanotimestamptz_from_int8(PG_FUNCTION_ARGS)
 	PG_RETURN_POINTER(nt_make(floordiv(v, NS_PER_SEC), floormod(v, NS_PER_SEC)));
 }
 
-PG_FUNCTION_INFO_V1(nanotimestamptz_to_int8);
-Datum
-nanotimestamptz_to_int8(PG_FUNCTION_ARGS)
+static int64
+nt_to_ns64(const NanoTimestamp *t, const char *what)
 {
-	NanoTimestamp *t = PG_GETARG_NT(0);
 	int64		r;
 
 	int64		sec = t->sec,
@@ -361,9 +375,16 @@ nanotimestamptz_to_int8(PG_FUNCTION_ARGS)
 		__builtin_add_overflow(r, nsec, &r))
 		ereport(ERROR,
 				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
-				 errmsg("nanotimestamptz out of range for bigint"),
-				 errdetail("bigint nanoseconds cover only 1677-09-21 to 2262-04-11.")));
-	PG_RETURN_INT64(r);
+				 errmsg("nanotimestamptz out of range for %s", what),
+				 errdetail("64-bit nanoseconds cover only 1677-09-21 00:12:43.145224192 to 2262-04-11 23:47:16.854775807 UTC.")));
+	return r;
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz_to_int8);
+Datum
+nanotimestamptz_to_int8(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(nt_to_ns64(PG_GETARG_NT(0), "bigint"));
 }
 
 /* --------------------------- clocks ------------------------------------ */
@@ -462,4 +483,100 @@ _PG_init(void)
 {
 	prev_ExecutorStart = ExecutorStart_hook;
 	ExecutorStart_hook = nt_ExecutorStart;
+}
+
+/* ===================== nanotimestamptz8 (8 bytes) ======================= */
+
+static inline NanoTimestamp
+ns64_split(int64 v)
+{
+	NanoTimestamp t;
+
+	t.sec = floordiv(v, NS_PER_SEC);
+	t.nsec = floormod(v, NS_PER_SEC);
+	return t;
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz8_in);
+Datum
+nanotimestamptz8_in(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(nt_to_ns64(nt_parse(PG_GETARG_CSTRING(0)), "nanotimestamptz8"));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz8_out);
+Datum
+nanotimestamptz8_out(PG_FUNCTION_ARGS)
+{
+	NanoTimestamp t = ns64_split(PG_GETARG_INT64(0));
+
+	PG_RETURN_CSTRING(nt_format(&t));
+}
+
+/* 16B -> 8B (errors out of range); 8B -> 16B is always exact */
+PG_FUNCTION_INFO_V1(nanotimestamptz8_from_nanotimestamptz);
+Datum
+nanotimestamptz8_from_nanotimestamptz(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(nt_to_ns64(PG_GETARG_NT(0), "nanotimestamptz8"));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz8_to_timestamptz);
+Datum
+nanotimestamptz8_to_timestamptz(PG_FUNCTION_ARGS)
+{
+	NanoTimestamp t = ns64_split(PG_GETARG_INT64(0));
+
+	PG_RETURN_TIMESTAMPTZ(nt_to_pg_us(&t));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz8_from_timestamptz);
+Datum
+nanotimestamptz8_from_timestamptz(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(nt_to_ns64(nt_from_pg_us(PG_GETARG_TIMESTAMPTZ(0), 0), "nanotimestamptz8"));
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz8_to_nanotimestamptz);
+Datum
+nanotimestamptz8_to_nanotimestamptz(PG_FUNCTION_ARGS)
+{
+	NanoTimestamp t = ns64_split(PG_GETARG_INT64(0));
+
+	PG_RETURN_POINTER(nt_make(t.sec, t.nsec));
+}
+
+static Datum
+ns64_from_parts(int64 sec, int64 nsec)
+{
+	NanoTimestamp t = {sec, nsec};
+
+	return Int64GetDatum(nt_to_ns64(&t, "nanotimestamptz8"));
+}
+
+PG_FUNCTION_INFO_V1(clock_ns8);
+Datum
+clock_ns8(PG_FUNCTION_ARGS)
+{
+	int64		s,
+				n;
+
+	read_clock(&s, &n);
+	return ns64_from_parts(s, n);
+}
+
+PG_FUNCTION_INFO_V1(now_ns8);
+Datum
+now_ns8(PG_FUNCTION_ARGS)
+{
+	capture_times();
+	return ns64_from_parts(xact_sec, xact_nsec);
+}
+
+PG_FUNCTION_INFO_V1(statement_ns8);
+Datum
+statement_ns8(PG_FUNCTION_ARGS)
+{
+	capture_times();
+	return ns64_from_parts(stmt_sec, stmt_nsec);
 }

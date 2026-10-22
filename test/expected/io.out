@@ -101,9 +101,11 @@ SELECT nanotimestamptz_send(t) FROM bin_src;
  \x00000863b432d9ff000000003b9ac9ff
 (4 rows)
 
-COPY bin_src TO '/tmp/pg_nanotime_regress.bin' WITH (FORMAT binary);
+-- per-port file name so several servers (different OS users) can run the suite
+SELECT '/tmp/pg_nanotime_regress_' || current_setting('port') || '.bin' AS binfile \gset
+COPY bin_src TO :'binfile' WITH (FORMAT binary);
 CREATE TEMP TABLE bin_dst(t nanotimestamptz);
-COPY bin_dst FROM '/tmp/pg_nanotime_regress.bin' WITH (FORMAT binary);
+COPY bin_dst FROM :'binfile' WITH (FORMAT binary);
 SELECT count(*) FROM bin_src s JOIN bin_dst d ON s.t = d.t;
  count 
 -------

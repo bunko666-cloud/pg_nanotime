@@ -30,7 +30,9 @@ SELECT t::text::nanotimestamptz = t FROM (VALUES ('4714-11-24 00:00:00 UTC BC'::
 CREATE TEMP TABLE bin_src(t nanotimestamptz);
 INSERT INTO bin_src VALUES ('4714-11-24 00:00:00 UTC BC'), ('1969-12-31 23:59:59.999999999 UTC'), ('2024-01-01 00:00:00.123456789 UTC'), ('294276-12-31 23:59:59.999999999 UTC');
 SELECT nanotimestamptz_send(t) FROM bin_src;
-COPY bin_src TO '/tmp/pg_nanotime_regress.bin' WITH (FORMAT binary);
+-- per-port file name so several servers (different OS users) can run the suite
+SELECT '/tmp/pg_nanotime_regress_' || current_setting('port') || '.bin' AS binfile \gset
+COPY bin_src TO :'binfile' WITH (FORMAT binary);
 CREATE TEMP TABLE bin_dst(t nanotimestamptz);
-COPY bin_dst FROM '/tmp/pg_nanotime_regress.bin' WITH (FORMAT binary);
+COPY bin_dst FROM :'binfile' WITH (FORMAT binary);
 SELECT count(*) FROM bin_src s JOIN bin_dst d ON s.t = d.t;

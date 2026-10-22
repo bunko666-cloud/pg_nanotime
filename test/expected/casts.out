@@ -66,10 +66,10 @@ SELECT '1677-09-21 00:12:43.145224192 UTC'::nanotimestamptz::bigint AS int64_min
 
 SELECT '1677-09-21 00:12:43.145224191 UTC'::nanotimestamptz::bigint;
 ERROR:  nanotimestamptz out of range for bigint
-DETAIL:  bigint nanoseconds cover only 1677-09-21 to 2262-04-11.
+DETAIL:  64-bit nanoseconds cover only 1677-09-21 00:12:43.145224192 to 2262-04-11 23:47:16.854775807 UTC.
 SELECT '2262-04-11 23:47:16.854775808 UTC'::nanotimestamptz::bigint;
 ERROR:  nanotimestamptz out of range for bigint
-DETAIL:  bigint nanoseconds cover only 1677-09-21 to 2262-04-11.
+DETAIL:  64-bit nanoseconds cover only 1677-09-21 00:12:43.145224192 to 2262-04-11 23:47:16.854775807 UTC.
 SELECT castcontext FROM pg_cast WHERE castsource = 'bigint'::regtype AND casttarget = 'nanotimestamptz'::regtype;
  castcontext 
 -------------
