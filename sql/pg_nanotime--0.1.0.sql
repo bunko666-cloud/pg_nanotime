@@ -134,3 +134,139 @@ CREATE CAST (nanotimestamptz8 AS bigint) WITHOUT FUNCTION;
 CREATE FUNCTION clock_ns8() RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME' LANGUAGE C VOLATILE PARALLEL SAFE;
 CREATE FUNCTION now_ns8() RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME' LANGUAGE C STABLE PARALLEL RESTRICTED;
 CREATE FUNCTION statement_ns8() RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME' LANGUAGE C STABLE PARALLEL RESTRICTED;
+
+-- ============================ nanointerval ============================
+-- Fixed nanoseconds only (no months/days). 16 bytes {int64 sec, int64 nsec},
+-- range +/- (max - min of nanotimestamptz), so every ts - ts difference fits.
+CREATE TYPE nanointerval;
+CREATE FUNCTION nanointerval_in(cstring) RETURNS nanointerval AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_out(nanointerval) RETURNS cstring AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_recv(internal) RETURNS nanointerval AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_send(nanointerval) RETURNS bytea AS 'MODULE_PATHNAME', 'nanotimestamptz_send' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+-- CATEGORY 'T' (timespan): for an untyped literal such as ts + '1 day',
+-- PostgreSQL prefers the built-in interval (calendar semantics).
+CREATE TYPE nanointerval (
+  INPUT = nanointerval_in, OUTPUT = nanointerval_out,
+  RECEIVE = nanointerval_recv, SEND = nanointerval_send,
+  INTERNALLENGTH = 16, ALIGNMENT = double, STORAGE = plain, CATEGORY = 'T'
+);
+COMMENT ON TYPE nanointerval IS 'fixed-length time span in nanoseconds (no months or days)';
+
+CREATE FUNCTION nanointerval_lt(nanointerval, nanointerval) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_lt' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanointerval_le(nanointerval, nanointerval) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_le' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanointerval_eq(nanointerval, nanointerval) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_eq' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanointerval_ne(nanointerval, nanointerval) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_ne' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanointerval_ge(nanointerval, nanointerval) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_ge' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanointerval_gt(nanointerval, nanointerval) RETURNS bool AS 'MODULE_PATHNAME', 'nanotimestamptz_gt' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanointerval_cmp(nanointerval, nanointerval) RETURNS int4 AS 'MODULE_PATHNAME', 'nanotimestamptz_cmp' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanointerval_hash(nanointerval) RETURNS int4 AS 'MODULE_PATHNAME', 'nanotimestamptz_hash' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanointerval_larger(nanointerval, nanointerval) RETURNS nanointerval AS 'MODULE_PATHNAME', 'nanotimestamptz_larger' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_smaller(nanointerval, nanointerval) RETURNS nanointerval AS 'MODULE_PATHNAME', 'nanotimestamptz_smaller' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR <  (LEFTARG = nanointerval, RIGHTARG = nanointerval, PROCEDURE = nanointerval_lt, COMMUTATOR = >,  NEGATOR = >=, RESTRICT = scalarltsel, JOIN = scalarltjoinsel);
+CREATE OPERATOR <= (LEFTARG = nanointerval, RIGHTARG = nanointerval, PROCEDURE = nanointerval_le, COMMUTATOR = >=, NEGATOR = >,  RESTRICT = scalarlesel, JOIN = scalarlejoinsel);
+CREATE OPERATOR =  (LEFTARG = nanointerval, RIGHTARG = nanointerval, PROCEDURE = nanointerval_eq, COMMUTATOR = =,  NEGATOR = <>, RESTRICT = eqsel, JOIN = eqjoinsel, HASHES, MERGES);
+CREATE OPERATOR <> (LEFTARG = nanointerval, RIGHTARG = nanointerval, PROCEDURE = nanointerval_ne, COMMUTATOR = <>, NEGATOR = =,  RESTRICT = neqsel, JOIN = neqjoinsel);
+CREATE OPERATOR >= (LEFTARG = nanointerval, RIGHTARG = nanointerval, PROCEDURE = nanointerval_ge, COMMUTATOR = <=, NEGATOR = <,  RESTRICT = scalargesel, JOIN = scalargejoinsel);
+CREATE OPERATOR >  (LEFTARG = nanointerval, RIGHTARG = nanointerval, PROCEDURE = nanointerval_gt, COMMUTATOR = <,  NEGATOR = <=, RESTRICT = scalargtsel, JOIN = scalargtjoinsel);
+CREATE OPERATOR CLASS nanointerval_btree_ops DEFAULT FOR TYPE nanointerval USING btree AS
+  OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, OPERATOR 4 >=, OPERATOR 5 >,
+  FUNCTION 1 nanointerval_cmp(nanointerval, nanointerval);
+CREATE OPERATOR CLASS nanointerval_hash_ops DEFAULT FOR TYPE nanointerval USING hash AS
+  OPERATOR 1 =, FUNCTION 1 nanointerval_hash(nanointerval);
+CREATE AGGREGATE min(nanointerval) (SFUNC = nanointerval_smaller, STYPE = nanointerval, SORTOP = <, COMBINEFUNC = nanointerval_smaller, PARALLEL = SAFE);
+CREATE AGGREGATE max(nanointerval) (SFUNC = nanointerval_larger, STYPE = nanointerval, SORTOP = >, COMBINEFUNC = nanointerval_larger, PARALLEL = SAFE);
+
+-- arithmetic
+CREATE FUNCTION nanointerval_um(nanointerval) RETURNS nanointerval AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_pl(nanointerval, nanointerval) RETURNS nanointerval AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_mi(nanointerval, nanointerval) RETURNS nanointerval AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_mul_int8(nanointerval, bigint) RETURNS nanointerval AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION int8_mul_nanointerval(bigint, nanointerval) RETURNS nanointerval AS 'SELECT nanointerval_mul_int8($2, $1)' LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_div_int8(nanointerval, bigint) RETURNS nanointerval AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_ns(nanointerval) RETURNS numeric AS 'MODULE_PATHNAME', 'nanointerval_to_ns_numeric' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+COMMENT ON FUNCTION nanointerval_ns(nanointerval) IS 'total nanoseconds as numeric (exact)';
+CREATE FUNCTION nanointerval_from_ns(numeric) RETURNS nanointerval AS 'MODULE_PATHNAME', 'nanointerval_from_ns_numeric' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+COMMENT ON FUNCTION nanointerval_from_ns(numeric) IS 'nanoseconds (rounded half away from zero) to nanointerval';
+CREATE FUNCTION nanointerval_mul_numeric(nanointerval, numeric) RETURNS nanointerval
+  AS 'SELECT nanointerval_from_ns(nanointerval_ns($1) * $2)' LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION numeric_mul_nanointerval(numeric, nanointerval) RETURNS nanointerval
+  AS 'SELECT nanointerval_from_ns(nanointerval_ns($2) * $1)' LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_div_numeric(nanointerval, numeric) RETURNS nanointerval
+  AS 'SELECT nanointerval_from_ns(nanointerval_ns($1) / $2)' LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR - (RIGHTARG = nanointerval, PROCEDURE = nanointerval_um);
+CREATE OPERATOR + (LEFTARG = nanointerval, RIGHTARG = nanointerval, PROCEDURE = nanointerval_pl, COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG = nanointerval, RIGHTARG = nanointerval, PROCEDURE = nanointerval_mi);
+CREATE OPERATOR * (LEFTARG = nanointerval, RIGHTARG = bigint, PROCEDURE = nanointerval_mul_int8, COMMUTATOR = *);
+CREATE OPERATOR * (LEFTARG = bigint, RIGHTARG = nanointerval, PROCEDURE = int8_mul_nanointerval, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG = nanointerval, RIGHTARG = bigint, PROCEDURE = nanointerval_div_int8);
+-- int4 variants avoid "operator is not unique" between bigint and numeric for integer literals
+CREATE FUNCTION nanointerval_mul_int4(nanointerval, integer) RETURNS nanointerval AS 'SELECT nanointerval_mul_int8($1, $2)' LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION int4_mul_nanointerval(integer, nanointerval) RETURNS nanointerval AS 'SELECT nanointerval_mul_int8($2, $1)' LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_div_int4(nanointerval, integer) RETURNS nanointerval AS 'SELECT nanointerval_div_int8($1, $2)' LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE;
+CREATE OPERATOR * (LEFTARG = nanointerval, RIGHTARG = integer, PROCEDURE = nanointerval_mul_int4, COMMUTATOR = *);
+CREATE OPERATOR * (LEFTARG = integer, RIGHTARG = nanointerval, PROCEDURE = int4_mul_nanointerval, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG = nanointerval, RIGHTARG = integer, PROCEDURE = nanointerval_div_int4);
+CREATE OPERATOR * (LEFTARG = nanointerval, RIGHTARG = numeric, PROCEDURE = nanointerval_mul_numeric, COMMUTATOR = *);
+CREATE OPERATOR * (LEFTARG = numeric, RIGHTARG = nanointerval, PROCEDURE = numeric_mul_nanointerval, COMMUTATOR = *);
+CREATE OPERATOR / (LEFTARG = nanointerval, RIGHTARG = numeric, PROCEDURE = nanointerval_div_numeric);
+
+-- casts
+CREATE FUNCTION nanointerval(interval) RETURNS nanointerval AS 'MODULE_PATHNAME', 'nanointerval_from_interval' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION "interval"(nanointerval) RETURNS interval AS 'MODULE_PATHNAME', 'nanointerval_to_interval' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval(bigint) RETURNS nanointerval AS 'MODULE_PATHNAME', 'nanointerval_from_int8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION int8(nanointerval) RETURNS bigint AS 'MODULE_PATHNAME', 'nanointerval_to_int8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE CAST (interval AS nanointerval) WITH FUNCTION nanointerval(interval) AS ASSIGNMENT;
+CREATE CAST (nanointerval AS interval) WITH FUNCTION "interval"(nanointerval) AS ASSIGNMENT;
+CREATE CAST (bigint AS nanointerval) WITH FUNCTION nanointerval(bigint);
+CREATE CAST (nanointerval AS bigint) WITH FUNCTION int8(nanointerval);
+
+-- ======================= timestamp arithmetic =======================
+CREATE FUNCTION nanotimestamptz_mi(nanotimestamptz, nanotimestamptz) RETURNS nanointerval AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamptz_pl_nanointerval(nanotimestamptz, nanointerval) RETURNS nanotimestamptz AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamptz_mi_nanointerval(nanotimestamptz, nanointerval) RETURNS nanotimestamptz AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_pl_nanotimestamptz(nanointerval, nanotimestamptz) RETURNS nanotimestamptz AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+-- with PostgreSQL interval: STABLE, because months/days follow the session TimeZone
+CREATE FUNCTION nanotimestamptz_pl_interval(nanotimestamptz, interval) RETURNS nanotimestamptz AS 'MODULE_PATHNAME' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamptz_mi_interval(nanotimestamptz, interval) RETURNS nanotimestamptz AS 'MODULE_PATHNAME' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION interval_pl_nanotimestamptz(interval, nanotimestamptz) RETURNS nanotimestamptz AS 'MODULE_PATHNAME' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR - (LEFTARG = nanotimestamptz, RIGHTARG = nanotimestamptz, PROCEDURE = nanotimestamptz_mi);
+CREATE OPERATOR + (LEFTARG = nanotimestamptz, RIGHTARG = nanointerval, PROCEDURE = nanotimestamptz_pl_nanointerval, COMMUTATOR = +);
+CREATE OPERATOR + (LEFTARG = nanointerval, RIGHTARG = nanotimestamptz, PROCEDURE = nanointerval_pl_nanotimestamptz, COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG = nanotimestamptz, RIGHTARG = nanointerval, PROCEDURE = nanotimestamptz_mi_nanointerval);
+CREATE OPERATOR + (LEFTARG = nanotimestamptz, RIGHTARG = interval, PROCEDURE = nanotimestamptz_pl_interval, COMMUTATOR = +);
+CREATE OPERATOR + (LEFTARG = interval, RIGHTARG = nanotimestamptz, PROCEDURE = interval_pl_nanotimestamptz, COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG = nanotimestamptz, RIGHTARG = interval, PROCEDURE = nanotimestamptz_mi_interval);
+
+CREATE FUNCTION nanotimestamptz8_mi(nanotimestamptz8, nanotimestamptz8) RETURNS nanointerval AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamptz8_pl_nanointerval(nanotimestamptz8, nanointerval) RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamptz8_mi_nanointerval(nanotimestamptz8, nanointerval) RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_pl_nanotimestamptz8(nanointerval, nanotimestamptz8) RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamptz8_pl_interval(nanotimestamptz8, interval) RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanotimestamptz8_mi_interval(nanotimestamptz8, interval) RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION interval_pl_nanotimestamptz8(interval, nanotimestamptz8) RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR - (LEFTARG = nanotimestamptz8, RIGHTARG = nanotimestamptz8, PROCEDURE = nanotimestamptz8_mi);
+CREATE OPERATOR + (LEFTARG = nanotimestamptz8, RIGHTARG = nanointerval, PROCEDURE = nanotimestamptz8_pl_nanointerval, COMMUTATOR = +);
+CREATE OPERATOR + (LEFTARG = nanointerval, RIGHTARG = nanotimestamptz8, PROCEDURE = nanointerval_pl_nanotimestamptz8, COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG = nanotimestamptz8, RIGHTARG = nanointerval, PROCEDURE = nanotimestamptz8_mi_nanointerval);
+CREATE OPERATOR + (LEFTARG = nanotimestamptz8, RIGHTARG = interval, PROCEDURE = nanotimestamptz8_pl_interval, COMMUTATOR = +);
+CREATE OPERATOR + (LEFTARG = interval, RIGHTARG = nanotimestamptz8, PROCEDURE = interval_pl_nanotimestamptz8, COMMUTATOR = +);
+CREATE OPERATOR - (LEFTARG = nanotimestamptz8, RIGHTARG = interval, PROCEDURE = nanotimestamptz8_mi_interval);
+
+-- ======================= bucketing / truncation / extract =======================
+CREATE FUNCTION time_bucket_ns(nanointerval, nanotimestamptz, nanotimestamptz DEFAULT '1970-01-01 00:00:00+00')
+  RETURNS nanotimestamptz AS 'MODULE_PATHNAME', 'time_bucket_ns' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION time_bucket_ns(nanointerval, nanotimestamptz8, nanotimestamptz8 DEFAULT '1970-01-01 00:00:00+00')
+  RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME', 'time_bucket_ns8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE FUNCTION date_trunc(text, nanotimestamptz) RETURNS nanotimestamptz AS 'MODULE_PATHNAME', 'nanotimestamptz_trunc' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION date_trunc(text, nanotimestamptz, text) RETURNS nanotimestamptz AS 'MODULE_PATHNAME', 'nanotimestamptz_trunc' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION date_trunc(text, nanotimestamptz8) RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME', 'nanotimestamptz8_trunc' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION date_trunc(text, nanotimestamptz8, text) RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME', 'nanotimestamptz8_trunc' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+
+-- EXTRACT(... FROM ...) syntax is hard-wired to pg_catalog.extract, so these are named extract_ns
+CREATE FUNCTION extract_ns(text, nanotimestamptz) RETURNS numeric AS 'MODULE_PATHNAME', 'nanotimestamptz_extract' LANGUAGE C STABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION extract_ns(text, nanointerval) RETURNS numeric AS 'MODULE_PATHNAME', 'nanointerval_extract' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;

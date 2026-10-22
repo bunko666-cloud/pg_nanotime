@@ -1,0 +1,105 @@
+SET timezone = 'UTC';
+-- ts - ts (both types), pre-1970 and across the epoch
+SELECT '2024-01-01 00:00:00.000000001 UTC'::nanotimestamptz - '1969-12-31 23:59:59.999999999 UTC'::nanotimestamptz;
+           ?column?            
+-------------------------------
+ 19723 days 00:00:00.000000002
+(1 row)
+
+SELECT '1969-12-31 23:59:59.999999999 UTC'::nanotimestamptz - '1970-01-01 UTC'::nanotimestamptz;
+      ?column?       
+---------------------
+ -00:00:00.000000001
+(1 row)
+
+SELECT '2262-04-11 23:47:16.854775807 UTC'::nanotimestamptz8 - '1677-09-21 00:12:43.145224192 UTC'::nanotimestamptz8 AS full8;
+             full8              
+--------------------------------
+ 213503 days 23:34:33.709551615
+(1 row)
+
+SELECT ('2262-04-11 23:47:16.854775807 UTC'::nanotimestamptz8 - '1677-09-21 00:12:43.145224192 UTC'::nanotimestamptz8)::bigint;
+ERROR:  nanointerval out of range for bigint
+-- ts +/- nanointerval
+SELECT '1969-12-31 23:59:59.999999999 UTC'::nanotimestamptz + '1 ns'::nanointerval, '1970-01-01 UTC'::nanotimestamptz - '1 ns'::nanointerval, '1 ns'::nanointerval + '2024-01-01 UTC'::nanotimestamptz;
+             ?column?             |             ?column?             |             ?column?             
+----------------------------------+----------------------------------+----------------------------------
+ 1970-01-01 00:00:00.000000000+00 | 1969-12-31 23:59:59.999999999+00 | 2024-01-01 00:00:00.000000001+00
+(1 row)
+
+SELECT '294276-12-31 23:59:59.999999999 UTC'::nanotimestamptz + '1 ns'::nanointerval;
+ERROR:  nanotimestamptz out of range
+SELECT '4714-11-24 00:00:00 UTC BC'::nanotimestamptz - '1 ns'::nanointerval;
+ERROR:  nanotimestamptz out of range
+SELECT '2024-01-01 UTC'::nanotimestamptz8 + '1.000000001 s'::nanointerval, '1 ns'::nanointerval + '2024-01-01 UTC'::nanotimestamptz8;
+             ?column?             |             ?column?             
+----------------------------------+----------------------------------
+ 2024-01-01 00:00:01.000000001+00 | 2024-01-01 00:00:00.000000001+00
+(1 row)
+
+SELECT '2262-04-11 23:47:16.854775807 UTC'::nanotimestamptz8 + '1 ns'::nanointerval;
+ERROR:  nanotimestamptz8 out of range
+DETAIL:  nanotimestamptz8 covers only 1677-09-21 00:12:43.145224192 to 2262-04-11 23:47:16.854775807 UTC.
+HINT:  Use nanotimestamptz (16 bytes) for values outside this range.
+SELECT '1677-09-21 00:12:43.145224192 UTC'::nanotimestamptz8 - '1 ns'::nanointerval;
+ERROR:  nanotimestamptz8 out of range
+DETAIL:  nanotimestamptz8 covers only 1677-09-21 00:12:43.145224192 to 2262-04-11 23:47:16.854775807 UTC.
+HINT:  Use nanotimestamptz (16 bytes) for values outside this range.
+SELECT pg_typeof('2024-01-01 UTC'::nanotimestamptz8 + '1 ns'::nanointerval);
+    pg_typeof     
+------------------
+ nanotimestamptz8
+(1 row)
+
+-- ts +/- interval: calendar semantics in the session time zone, sub-us digits kept
+SELECT '2024-01-31 12:00:00.000000005 UTC'::nanotimestamptz + interval '1 month', '2024-03-31 UTC'::nanotimestamptz - interval '1 month';
+             ?column?             |             ?column?             
+----------------------------------+----------------------------------
+ 2024-02-29 12:00:00.000000005+00 | 2024-02-29 00:00:00.000000000+00
+(1 row)
+
+SELECT '2023-02-28 00:00:00.123456789 UTC'::nanotimestamptz8 + interval '1 year 1 day 1 hour';
+             ?column?             
+----------------------------------
+ 2024-02-29 01:00:00.123456789+00
+(1 row)
+
+SET timezone = 'Europe/Amsterdam';
+-- DST: +1 day keeps wall clock, +24 hours does not (same as timestamptz)
+SELECT '2024-03-30 12:00:00.000000001'::nanotimestamptz + interval '1 day' AS plus_1day,
+       '2024-03-30 12:00:00.000000001'::nanotimestamptz + interval '24 hours' AS plus_24h,
+       '2024-03-30 12:00:00.000000001'::nanotimestamptz + '1 day'::nanointerval AS plus_fixed_day;
+            plus_1day             |             plus_24h             |          plus_fixed_day          
+----------------------------------+----------------------------------+----------------------------------
+ 2024-03-31 12:00:00.000000001+02 | 2024-03-31 13:00:00.000000001+02 | 2024-03-31 13:00:00.000000001+02
+(1 row)
+
+SELECT ('2024-03-30 12:00:00'::timestamptz + interval '1 day')::nanotimestamptz = '2024-03-30 12:00:00'::nanotimestamptz + interval '1 day' AS same_as_timestamptz;
+ same_as_timestamptz 
+---------------------
+ t
+(1 row)
+
+SET timezone = 'UTC';
+-- untyped literal resolves to interval (calendar), typed nanointerval keeps ns
+SELECT '2024-01-01 UTC'::nanotimestamptz + '1 month', '2024-01-01 UTC'::nanotimestamptz + '0.000000001 s'::nanointerval;
+             ?column?             |             ?column?             
+----------------------------------+----------------------------------
+ 2024-02-01 00:00:00.000000000+00 | 2024-01-01 00:00:00.000000001+00
+(1 row)
+
+SELECT '294276-12-01 UTC'::nanotimestamptz + interval '1 month';
+ERROR:  timestamp out of range
+SELECT '2262-04-01 UTC'::nanotimestamptz8 + interval '1 month';
+ERROR:  nanotimestamptz8 out of range
+DETAIL:  nanotimestamptz8 covers only 1677-09-21 00:12:43.145224192 to 2262-04-11 23:47:16.854775807 UTC.
+HINT:  Use nanotimestamptz (16 bytes) for values outside this range.
+SELECT '2024-01-01 UTC'::nanotimestamptz + interval 'infinity';
+ERROR:  infinite timestamps are not supported by nanotimestamptz
+-- ts - untyped literal is ts - ts
+SELECT '2024-01-02 UTC'::nanotimestamptz - '2024-01-01';
+ ?column? 
+----------
+ 1 day
+(1 row)
+

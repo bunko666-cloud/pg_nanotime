@@ -100,3 +100,25 @@ make installcheck PGHOST=/tmp PGPORT=5499 PGUSER=postgres
 - `nanointerval`（固定奈秒）與算術運算子、`ts - ts`。
 - `date_trunc`/`time_bucket_ns` 類函式、`infinity`。
 - TimescaleDB 連續聚合：需向上游提案。
+
+## Phase 2：nanointerval、算術、分桶
+
+### nanointerval
+- 只存固定奈秒數（沒有月、日欄位），16 bytes `{int64 sec, int64 nsec}`。
+- **為什麼不用 int64**：int64 奈秒只涵蓋約 ±292 年，但 `nanotimestamptz` 涵蓋約 30 萬年，任兩個值相減都必須放得下。16B 的範圍是 ±(max − min) ≈ ±9.4e21 ns，剛好容納所有 ts − ts 的差值，超出時嚴格報錯 `nanointerval out of range`。
+- 輸出：`1 day 02:03:04.123456789`、`-1 day -02:00:00.000000000`、`-14 days`，小數固定 9 位。
+- 輸入：單位字（ns/us/ms/s/min/h/d/w 及全名）、`HH:MM[:SS.f]`、`@`、`ago`、純數字（秒）、ISO 8601 `P..T..`。month/year 會報錯並提示改用 interval；比 1 ns 更細也會報錯。
+- 運算子：比較、B-tree、hash、一元 `-`、`+`、`-`、`* / int`（/ 四捨五入，遠離 0）、`* / numeric`。`smallint` 需要先轉型（不然會有 `operator is not unique`）。
+- 轉型：`interval ↔ nanointerval` 是 ASSIGNMENT 轉型。從 interval 轉入時，有月份或 infinity 會報錯，**1 day 當作 24 小時**。轉成 interval 時會向下取整到 µs。`bigint ↔ nanointerval`（奈秒）只能明確轉型。
+- `nanointerval_ns(x) → numeric`、`nanointerval_from_ns(numeric)`。
+
+### 算術（兩種時間型別都有，溢位都會報錯）
+- `ts − ts → nanointerval`
+- `ts ± nanointerval`：固定奈秒
+- `ts ± interval`：依 session 時區做日曆運算（與 timestamptz 相同，DST 下 +1 day 會保留牆上時間），保留 µs 以下的位數。因為受時區影響，所以是 STABLE。
+- ⚠️ **字面值陷阱**：`ts + '1 day'` 這類未標型別的字串會解析成內建的 **interval**（日曆語意、µs 精度）。需要奈秒精度或固定長度時，請寫 `'...'::nanointerval`。`ts − '2024-01-01'` 會解析成 ts − ts。
+
+### 分桶與相關函式
+- `time_bucket_ns(width nanointerval, ts [, origin])`：兩種型別都有，回傳與輸入相同的型別。預設 origin 是 1970-01-01 UTC，向下取整（1970 年以前也正確）。width ≤ 0 會報錯。**若桶起點低於型別最小值，會夾到最小值**（例如 nt8 在 1677-09-21 那一天）。
+- `date_trunc(text, ts [, zone])`：µs 以上的單位交給 PG 的 timestamptz_trunc；`'nanosecond'` 則原值回傳。
+- `extract_ns(text, ts|nanointerval) → numeric`（`EXTRACT(... FROM ...)` 語法在 PG 中寫死，無法擴充）：epoch 精確到 9 位小數；nanosecond、microsecond、millisecond、second 都含奈秒；其他欄位交給 PG 處理。nanointerval 支援 epoch、day、hour、minute 與秒以下的欄位。

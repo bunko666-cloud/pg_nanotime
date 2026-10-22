@@ -1,0 +1,220 @@
+SET timezone = 'UTC';
+SELECT typlen, typcategory FROM pg_type WHERE typname = 'nanointerval';
+ typlen | typcategory 
+--------+-------------
+     16 | T
+(1 row)
+
+-- text input: own format, PostgreSQL-style units, ISO 8601
+SELECT '1 day 02:03:04.123456789'::nanointerval, '-1 day -02:00:00'::nanointerval, '00:00:00.000000001'::nanointerval;
+       nanointerval       |        nanointerval        |    nanointerval    
+--------------------------+----------------------------+--------------------
+ 1 day 02:03:04.123456789 | -1 day -02:00:00.000000000 | 00:00:00.000000001
+(1 row)
+
+SELECT '1.5 hours 3 ns'::nanointerval, '2 weeks ago'::nanointerval, '@ 1 minute 30 seconds'::nanointerval, '90'::nanointerval;
+    nanointerval    | nanointerval |    nanointerval    |    nanointerval    
+--------------------+--------------+--------------------+--------------------
+ 01:30:00.000000003 | -14 days     | 00:01:30.000000000 | 00:01:30.000000000
+(1 row)
+
+SELECT '1 us 1 ms'::nanointerval, '1.000000001 s'::nanointerval, '-00:00:00.5'::nanointerval;
+    nanointerval    |    nanointerval    |    nanointerval     
+--------------------+--------------------+---------------------
+ 00:00:00.001001000 | 00:00:01.000000001 | -00:00:00.500000000
+(1 row)
+
+SELECT 'PT1H2M3.000000004S'::nanointerval, 'P1W2DT3H'::nanointerval, 'P-1D'::nanointerval;
+    nanointerval    |       nanointerval        | nanointerval 
+--------------------+---------------------------+--------------
+ 01:02:03.000000004 | 9 days 03:00:00.000000000 | -1 day
+(1 row)
+
+-- errors: months/years, sub-ns precision, garbage, overflow
+SELECT '1 month'::nanointerval;
+ERROR:  nanointerval does not support months or years: "1 month"
+LINE 1: SELECT '1 month'::nanointerval;
+               ^
+HINT:  nanointerval stores a fixed number of nanoseconds; use interval for calendar units.
+SELECT '1 year 2 days'::nanointerval;
+ERROR:  nanointerval does not support months or years: "1 year 2 days"
+LINE 1: SELECT '1 year 2 days'::nanointerval;
+               ^
+HINT:  nanointerval stores a fixed number of nanoseconds; use interval for calendar units.
+SELECT 'P1Y'::nanointerval;
+ERROR:  nanointerval does not support months or years: "P1Y"
+LINE 1: SELECT 'P1Y'::nanointerval;
+               ^
+HINT:  nanointerval stores a fixed number of nanoseconds; use interval for calendar units.
+SELECT 'P1M'::nanointerval;
+ERROR:  nanointerval does not support months or years: "P1M"
+LINE 1: SELECT 'P1M'::nanointerval;
+               ^
+HINT:  nanointerval stores a fixed number of nanoseconds; use interval for calendar units.
+SELECT '0.5 ns'::nanointerval;
+ERROR:  nanointerval input is more precise than 1 nanosecond: "0.5 ns"
+LINE 1: SELECT '0.5 ns'::nanointerval;
+               ^
+SELECT '1.0000000001 s'::nanointerval;
+ERROR:  nanointerval input is more precise than 1 nanosecond: "1.0000000001 s"
+LINE 1: SELECT '1.0000000001 s'::nanointerval;
+               ^
+SELECT 'abc'::nanointerval;
+ERROR:  invalid input syntax for type nanointerval: "abc"
+LINE 1: SELECT 'abc'::nanointerval;
+               ^
+SELECT '1 fortnight'::nanointerval;
+ERROR:  invalid input syntax for type nanointerval: "1 fortnight"
+LINE 1: SELECT '1 fortnight'::nanointerval;
+               ^
+SELECT '01:60:00'::nanointerval;
+ERROR:  invalid input syntax for type nanointerval: "01:60:00"
+LINE 1: SELECT '01:60:00'::nanointerval;
+               ^
+SELECT '200000000000000000000000 ns'::nanointerval;
+ERROR:  nanointerval out of range
+LINE 1: SELECT '200000000000000000000000 ns'::nanointerval;
+               ^
+-- range: exactly max(nanotimestamptz) - min(nanotimestamptz)
+SELECT '294276-12-31 23:59:59.999999999 UTC'::nanotimestamptz - '4714-11-24 00:00:00 UTC BC'::nanotimestamptz AS max_span;
+             max_span              
+-----------------------------------
+ 109203527 days 23:59:59.999999999
+(1 row)
+
+SELECT '4714-11-24 00:00:00 UTC BC'::nanotimestamptz - '294276-12-31 23:59:59.999999999 UTC'::nanotimestamptz AS min_span;
+              min_span               
+-------------------------------------
+ -109203527 days -23:59:59.999999999
+(1 row)
+
+SELECT ('294276-12-31 23:59:59.999999999 UTC'::nanotimestamptz - '4714-11-24 00:00:00 UTC BC'::nanotimestamptz) + '1 ns'::nanointerval;
+ERROR:  nanointerval out of range
+-- output round trip
+SELECT v::text::nanointerval = v FROM (VALUES ('1 day 02:03:04.123456789'::nanointerval), ('-3 days -00:00:00.000000001'), ('-00:00:00.5'), ('0'), ('5 days')) t(v);
+ ?column? 
+----------
+ t
+ t
+ t
+ t
+ t
+(5 rows)
+
+-- comparisons, aggregates, index
+SELECT '1 day'::nanointerval = '24 hours'::nanointerval, '1 ns'::nanointerval > '0'::nanointerval, '-1 ns'::nanointerval < '0'::nanointerval;
+ ?column? | ?column? | ?column? 
+----------+----------+----------
+ t        | t        | t
+(1 row)
+
+SELECT min(v), max(v) FROM (VALUES ('1 s'::nanointerval), ('-1 ns'), ('1 day')) t(v);
+         min         |  max  
+---------------------+-------
+ -00:00:00.000000001 | 1 day
+(1 row)
+
+CREATE TEMP TABLE iv(v nanointerval);
+INSERT INTO iv SELECT (g::bigint * 1000003)::nanointerval FROM generate_series(-5000, 5000) g;
+CREATE INDEX ON iv(v);
+CREATE INDEX iv_h ON iv USING hash(v);
+SET enable_seqscan = off;
+EXPLAIN (COSTS OFF) SELECT * FROM iv WHERE v < '-4 ms';
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Bitmap Heap Scan on iv
+   Recheck Cond: (v < '-00:00:00.004000000'::nanointerval)
+   ->  Bitmap Index Scan on iv_v_idx
+         Index Cond: (v < '-00:00:00.004000000'::nanointerval)
+(4 rows)
+
+SELECT count(*) FROM iv WHERE v < '-4 ms';
+ count 
+-------
+  4997
+(1 row)
+
+SELECT count(*) FROM iv WHERE v = '1000003 ns';
+ count 
+-------
+     1
+(1 row)
+
+RESET enable_seqscan;
+-- arithmetic
+SELECT -'1 ns'::nanointerval, '1 s'::nanointerval + '1 ns', '1 s'::nanointerval - '2 s';
+      ?column?       |      ?column?      |      ?column?       
+---------------------+--------------------+---------------------
+ -00:00:00.000000001 | 00:00:01.000000001 | -00:00:01.000000000
+(1 row)
+
+SELECT '1 hour'::nanointerval * 3, 3 * '1 s'::nanointerval, '1 s'::nanointerval * 2::bigint, '1 hour'::nanointerval * 1.5, 0.5 * '3 ns'::nanointerval;
+      ?column?      |      ?column?      |      ?column?      |      ?column?      |      ?column?      
+--------------------+--------------------+--------------------+--------------------+--------------------
+ 03:00:00.000000000 | 00:00:03.000000000 | 00:00:02.000000000 | 01:30:00.000000000 | 00:00:00.000000002
+(1 row)
+
+SELECT '1 hour'::nanointerval / 7, '10 ns'::nanointerval / 4, '-10 ns'::nanointerval / 4, '1 s'::nanointerval / 3.0;
+      ?column?      |      ?column?      |      ?column?       |      ?column?      
+--------------------+--------------------+---------------------+--------------------
+ 00:08:34.285714286 | 00:00:00.000000003 | -00:00:00.000000003 | 00:00:00.333333333
+(1 row)
+
+SELECT '1 s'::nanointerval / 0;
+ERROR:  division by zero
+CONTEXT:  SQL function "nanointerval_div_int4" statement 1
+SELECT '1 s'::nanointerval / 0.0;
+ERROR:  division by zero
+CONTEXT:  SQL function "nanointerval_div_numeric" statement 1
+SELECT ('294276-12-31 23:59:59.999999999 UTC'::nanotimestamptz - '4714-11-24 00:00:00 UTC BC'::nanotimestamptz) * 2;
+ERROR:  nanointerval out of range
+CONTEXT:  SQL function "nanointerval_mul_int4" statement 1
+SELECT ('294276-12-31 23:59:59.999999999 UTC'::nanotimestamptz - '4714-11-24 00:00:00 UTC BC'::nanotimestamptz) * 9223372036854775807;
+ERROR:  nanointerval out of range
+-- casts with interval
+SELECT interval '1 day 02:03:04.123456'::nanointerval, interval '-36 hours'::nanointerval;
+       nanointerval       |        nanointerval        
+--------------------------+----------------------------
+ 1 day 02:03:04.123456000 | -1 day -12:00:00.000000000
+(1 row)
+
+SELECT interval '1 month'::nanointerval;
+ERROR:  cannot convert interval with months or years to nanointerval
+DETAIL:  nanointerval stores a fixed number of nanoseconds; days are converted as 24 hours, but months have no fixed length.
+SELECT interval 'infinity'::nanointerval;
+ERROR:  infinite intervals are not supported by nanointerval
+SELECT '1 day 00:00:00.000001999'::nanointerval::interval, '-00:00:00.000000001'::nanointerval::interval;
+         interval         |      interval       
+--------------------------+---------------------
+ @ 24 hours 0.000001 secs | @ 0.000001 secs ago
+(1 row)
+
+SELECT ('294276-12-31 23:59:59.999999999 UTC'::nanotimestamptz - '4714-11-24 00:00:00 UTC BC'::nanotimestamptz)::interval;
+ERROR:  nanointerval out of range for interval
+-- casts with bigint (explicit only)
+SELECT 1000::bigint::nanointerval, '1 s'::nanointerval::bigint, (-9223372036854775808)::bigint::nanointerval::bigint;
+    nanointerval    |    int8    |         int8         
+--------------------+------------+----------------------
+ 00:00:00.000001000 | 1000000000 | -9223372036854775808
+(1 row)
+
+SELECT '300 years'::nanointerval;
+ERROR:  nanointerval does not support months or years: "300 years"
+LINE 1: SELECT '300 years'::nanointerval;
+               ^
+HINT:  nanointerval stores a fixed number of nanoseconds; use interval for calendar units.
+SELECT ('1 day'::nanointerval * 200000)::bigint;
+ERROR:  nanointerval out of range for bigint
+SELECT nanointerval_ns('1 day 00:00:00.000000001'), nanointerval_from_ns(1.5), nanointerval_from_ns(-1.5);
+ nanointerval_ns | nanointerval_from_ns | nanointerval_from_ns 
+-----------------+----------------------+----------------------
+  86400000000001 | 00:00:00.000000002   | -00:00:00.000000002
+(1 row)
+
+-- binary
+SELECT nanointerval_send('-1 ns');
+         nanointerval_send          
+------------------------------------
+ \xffffffffffffffff000000003b9ac9ff
+(1 row)
+

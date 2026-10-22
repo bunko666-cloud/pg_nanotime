@@ -1,0 +1,140 @@
+SET timezone = 'UTC';
+-- floor semantics including pre-1970
+SELECT time_bucket_ns('1 s', '1969-12-31 23:59:59.999999999 UTC'::nanotimestamptz), time_bucket_ns('1 s', '1970-01-01 00:00:00.000000001 UTC'::nanotimestamptz);
+          time_bucket_ns          |          time_bucket_ns          
+----------------------------------+----------------------------------
+ 1969-12-31 23:59:59.000000000+00 | 1970-01-01 00:00:00.000000000+00
+(1 row)
+
+SELECT time_bucket_ns('15 min', '2024-01-01 10:14:59.999999999 UTC'::nanotimestamptz), time_bucket_ns('15 min', '2024-01-01 10:15:00 UTC'::nanotimestamptz);
+          time_bucket_ns          |          time_bucket_ns          
+----------------------------------+----------------------------------
+ 2024-01-01 10:00:00.000000000+00 | 2024-01-01 10:15:00.000000000+00
+(1 row)
+
+SELECT time_bucket_ns('1 day', '1900-06-15 12:00:00.5 UTC'::nanotimestamptz8), time_bucket_ns('100 ns', '1969-12-31 23:59:59.99999995 UTC'::nanotimestamptz8);
+          time_bucket_ns          |          time_bucket_ns          
+----------------------------------+----------------------------------
+ 1900-06-15 00:00:00.000000000+00 | 1969-12-31 23:59:59.999999900+00
+(1 row)
+
+SELECT pg_typeof(time_bucket_ns('1 day', '2024-01-01'::nanotimestamptz8));
+    pg_typeof     
+------------------
+ nanotimestamptz8
+(1 row)
+
+-- origin
+SELECT time_bucket_ns('1 day', '2024-01-01 05:00 UTC'::nanotimestamptz, '2000-01-01 06:00 UTC'), time_bucket_ns('7 days', '2024-01-10 UTC'::nanotimestamptz, '2000-01-03 UTC');
+          time_bucket_ns          |          time_bucket_ns          
+----------------------------------+----------------------------------
+ 2023-12-31 06:00:00.000000000+00 | 2024-01-08 00:00:00.000000000+00
+(1 row)
+
+SELECT time_bucket_ns('1 hour', '2024-01-01 05:30 UTC'::nanotimestamptz8, '2030-01-01 00:10 UTC');
+          time_bucket_ns          
+----------------------------------
+ 2024-01-01 05:10:00.000000000+00
+(1 row)
+
+-- range limits: bucket start before the minimum is clamped to the minimum
+SELECT time_bucket_ns('1 day', '1677-09-21 00:12:43.145224192 UTC'::nanotimestamptz8) AS clamped8;
+             clamped8             
+----------------------------------
+ 1677-09-21 00:12:43.145224192+00
+(1 row)
+
+SELECT time_bucket_ns('1 day', '1677-09-21 12:00 UTC'::nanotimestamptz8) AS clamped8b, time_bucket_ns('1 day', '1677-09-22 12:00 UTC'::nanotimestamptz8) AS normal8;
+            clamped8b             |             normal8              
+----------------------------------+----------------------------------
+ 1677-09-21 00:12:43.145224192+00 | 1677-09-22 00:00:00.000000000+00
+(1 row)
+
+SELECT time_bucket_ns('1 day', '2262-04-11 23:47:16.854775807 UTC'::nanotimestamptz8) AS top8;
+               top8               
+----------------------------------
+ 2262-04-11 00:00:00.000000000+00
+(1 row)
+
+SELECT time_bucket_ns('7 days', '4714-11-24 00:00:00 UTC BC'::nanotimestamptz) AS clamped16, time_bucket_ns('1 day', '294276-12-31 23:59:59.999999999 UTC'::nanotimestamptz) AS top16;
+              clamped16              |               top16                
+-------------------------------------+------------------------------------
+ 4714-11-24 00:00:00.000000000+00 BC | 294276-12-31 00:00:00.000000000+00
+(1 row)
+
+SELECT time_bucket_ns('100000 years'::nanointerval, '2024-01-01'::nanotimestamptz);
+ERROR:  nanointerval does not support months or years: "100000 years"
+LINE 1: SELECT time_bucket_ns('100000 years'::nanointerval, '2024-01...
+                              ^
+HINT:  nanointerval stores a fixed number of nanoseconds; use interval for calendar units.
+SELECT time_bucket_ns('0', '2024-01-01'::nanotimestamptz);
+ERROR:  time_bucket_ns width must be greater than zero
+SELECT time_bucket_ns('-1 s', '2024-01-01'::nanotimestamptz);
+ERROR:  time_bucket_ns width must be greater than zero
+-- grouping
+SELECT time_bucket_ns('1 s', t) b, count(*) FROM (SELECT ('1969-12-31 23:59:58 UTC'::nanotimestamptz + (g::bigint * 250000000)::nanointerval) t FROM generate_series(0, 11) g) s GROUP BY 1 ORDER BY 1;
+                b                 | count 
+----------------------------------+-------
+ 1969-12-31 23:59:58.000000000+00 |     4
+ 1969-12-31 23:59:59.000000000+00 |     4
+ 1970-01-01 00:00:00.000000000+00 |     4
+(3 rows)
+
+-- date_trunc
+SELECT date_trunc('second', '1969-12-31 23:59:59.999999999 UTC'::nanotimestamptz), date_trunc('microsecond', '2024-01-01 00:00:00.123456789 UTC'::nanotimestamptz), date_trunc('nanosecond', '2024-01-01 00:00:00.123456789 UTC'::nanotimestamptz);
+            date_trunc            |            date_trunc            |            date_trunc            
+----------------------------------+----------------------------------+----------------------------------
+ 1969-12-31 23:59:59.000000000+00 | 2024-01-01 00:00:00.123456000+00 | 2024-01-01 00:00:00.123456789+00
+(1 row)
+
+SELECT date_trunc('day', '2024-06-15 23:30:00.000000001 UTC'::nanotimestamptz8), date_trunc('month', '2024-06-15 UTC'::nanotimestamptz8), pg_typeof(date_trunc('day', '2024-06-15'::nanotimestamptz8));
+            date_trunc            |            date_trunc            |    pg_typeof     
+----------------------------------+----------------------------------+------------------
+ 2024-06-15 00:00:00.000000000+00 | 2024-06-01 00:00:00.000000000+00 | nanotimestamptz8
+(1 row)
+
+SET timezone = 'Asia/Taipei';
+SELECT date_trunc('day', '2024-06-15 20:00:00.5 UTC'::nanotimestamptz), date_trunc('day', '2024-06-15 20:00:00.5 UTC'::nanotimestamptz, 'UTC');
+            date_trunc            |            date_trunc            
+----------------------------------+----------------------------------
+ 2024-06-16 00:00:00.000000000+08 | 2024-06-15 08:00:00.000000000+08
+(1 row)
+
+SET timezone = 'UTC';
+SELECT date_trunc('fortnight', '2024-01-01'::nanotimestamptz);
+ERROR:  unit "fortnight" not recognized for type timestamp with time zone
+-- extract_ns
+SELECT extract_ns('epoch', '1969-12-31 23:59:59.999999999 UTC'::nanotimestamptz), extract_ns('epoch', '2024-01-01 00:00:00.000000001 UTC'::nanotimestamptz8);
+  extract_ns  |      extract_ns      
+--------------+----------------------
+ -0.000000001 | 1704067200.000000001
+(1 row)
+
+SELECT extract_ns('nanosecond', '2024-01-01 00:00:12.345678901 UTC'::nanotimestamptz), extract_ns('microsecond', '2024-01-01 00:00:12.345678901 UTC'::nanotimestamptz),
+       extract_ns('millisecond', '2024-01-01 00:00:12.345678901 UTC'::nanotimestamptz), extract_ns('second', '2024-01-01 00:00:12.345678901 UTC'::nanotimestamptz);
+ extract_ns  |  extract_ns  |  extract_ns  |  extract_ns  
+-------------+--------------+--------------+--------------
+ 12345678901 | 12345678.901 | 12345.678901 | 12.345678901
+(1 row)
+
+SELECT extract_ns('year', '1969-12-31 23:59:59.999999999 UTC'::nanotimestamptz), extract_ns('hour', '2024-01-01 05:00 UTC'::nanotimestamptz), extract_ns('dow', '2024-01-01'::nanotimestamptz);
+ extract_ns | extract_ns | extract_ns 
+------------+------------+------------
+       1969 |          5 |          1
+(1 row)
+
+SELECT extract_ns('epoch', '4714-11-24 00:00:00 UTC BC'::nanotimestamptz);
+       extract_ns        
+-------------------------
+ -210866803200.000000000
+(1 row)
+
+SELECT extract_ns('epoch', '-1 day -00:00:00.000000001'::nanointerval), extract_ns('day', '-1 day -02:03:04.5'::nanointerval), extract_ns('hour', '-1 day -02:03:04.5'::nanointerval),
+       extract_ns('nanosecond', '00:01:02.000000003'::nanointerval), extract_ns('second', '-00:00:04.5'::nanointerval);
+    extract_ns    | extract_ns | extract_ns | extract_ns |  extract_ns  
+------------------+------------+------------+------------+--------------
+ -86400.000000001 |         -1 |         -2 | 2000000003 | -4.500000000
+(1 row)
+
+SELECT extract_ns('month', '1 day'::nanointerval);
+ERROR:  unit "month" not supported for type nanointerval
