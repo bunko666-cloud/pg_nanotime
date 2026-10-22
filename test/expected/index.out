@@ -1,0 +1,68 @@
+SET timezone = 'UTC';
+CREATE TEMP TABLE ix(t nanotimestamptz, v int);
+INSERT INTO ix SELECT (g::bigint * 1000000007 - 5000000000000)::nanotimestamptz, g FROM generate_series(1, 10000) g;
+INSERT INTO ix VALUES ('4714-11-24 00:00:00 UTC BC', -1), ('294276-12-31 23:59:59.999999999 UTC', -2), ('1969-12-31 23:59:59.999999999 UTC', -3);
+CREATE INDEX ix_bt ON ix(t);
+CREATE INDEX ix_h ON ix USING hash(t);
+ANALYZE ix;
+SET enable_seqscan = off;
+SET enable_bitmapscan = off;
+EXPLAIN (COSTS OFF) SELECT * FROM ix WHERE t >= '1969-12-31 UTC' AND t < '1970-01-01 UTC';
+                                                                QUERY PLAN                                                                
+------------------------------------------------------------------------------------------------------------------------------------------
+ Index Scan using ix_bt on ix
+   Index Cond: ((t >= '1969-12-31 00:00:00.000000000+00'::nanotimestamptz) AND (t < '1970-01-01 00:00:00.000000000+00'::nanotimestamptz))
+(2 rows)
+
+SELECT v FROM ix WHERE t >= '1969-12-31 UTC' AND t < '1970-01-01 UTC' ORDER BY t LIMIT 3;
+ v 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+SELECT t, v FROM ix ORDER BY t LIMIT 3;
+                  t                  | v  
+-------------------------------------+----
+ 4714-11-24 00:00:00.000000000+00 BC | -1
+ 1969-12-31 22:36:41.000000007+00    |  1
+ 1969-12-31 22:36:42.000000014+00    |  2
+(3 rows)
+
+SELECT t, v FROM ix ORDER BY t DESC LIMIT 2;
+                 t                  |   v   
+------------------------------------+-------
+ 294276-12-31 23:59:59.999999999+00 |    -2
+ 1970-01-01 01:23:20.000070000+00   | 10000
+(2 rows)
+
+SET enable_indexscan = on;
+DROP INDEX ix_bt;
+EXPLAIN (COSTS OFF) SELECT v FROM ix WHERE t = '1969-12-31 23:59:59.999999999 UTC';
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Index Scan using ix_h on ix
+   Index Cond: (t = '1969-12-31 23:59:59.999999999+00'::nanotimestamptz)
+(2 rows)
+
+SELECT v FROM ix WHERE t = '1969-12-31 23:59:59.999999999 UTC';
+ v  
+----
+ -3
+(1 row)
+
+RESET enable_seqscan;
+-- hash join / group by
+SELECT count(*) FROM ix a JOIN ix b USING (t);
+ count 
+-------
+ 10003
+(1 row)
+
+SELECT count(DISTINCT t) FROM ix;
+ count 
+-------
+ 10003
+(1 row)
+

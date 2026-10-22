@@ -1,0 +1,84 @@
+SET timezone = 'UTC';
+-- timestamptz -> nanotimestamptz is exact
+SELECT '2024-01-01 00:00:00.123456 UTC'::timestamptz::nanotimestamptz;
+         nanotimestamptz          
+----------------------------------
+ 2024-01-01 00:00:00.123456000+00
+(1 row)
+
+SELECT '1969-12-31 23:59:59.999999 UTC'::timestamptz::nanotimestamptz;
+         nanotimestamptz          
+----------------------------------
+ 1969-12-31 23:59:59.999999000+00
+(1 row)
+
+SELECT '4714-11-24 00:00:00 UTC BC'::timestamptz::nanotimestamptz;
+           nanotimestamptz           
+-------------------------------------
+ 4714-11-24 00:00:00.000000000+00 BC
+(1 row)
+
+SELECT 'infinity'::timestamptz::nanotimestamptz;
+ERROR:  infinite timestamps are not supported by nanotimestamptz
+-- nanotimestamptz -> timestamptz rounds DOWN (floor), also before 1970
+SELECT '2024-01-01 00:00:00.123456999 UTC'::nanotimestamptz::timestamptz;
+             timestamptz             
+-------------------------------------
+ Mon Jan 01 00:00:00.123456 2024 UTC
+(1 row)
+
+SELECT '1969-12-31 23:59:59.999999999 UTC'::nanotimestamptz::timestamptz;
+             timestamptz             
+-------------------------------------
+ Wed Dec 31 23:59:59.999999 1969 UTC
+(1 row)
+
+SELECT '1900-01-01 00:00:00.000000001 UTC'::nanotimestamptz::timestamptz;
+         timestamptz          
+------------------------------
+ Mon Jan 01 00:00:00 1900 UTC
+(1 row)
+
+SELECT '294276-12-31 23:59:59.999999999 UTC'::nanotimestamptz::timestamptz;
+              timestamptz              
+---------------------------------------
+ Sun Dec 31 23:59:59.999999 294276 UTC
+(1 row)
+
+-- bigint (ns since 1970) both ways, explicit only
+SELECT (-9223372036854775808)::bigint::nanotimestamptz, 9223372036854775807::bigint::nanotimestamptz;
+         nanotimestamptz          |         nanotimestamptz          
+----------------------------------+----------------------------------
+ 1677-09-21 00:12:43.145224192+00 | 2262-04-11 23:47:16.854775807+00
+(1 row)
+
+SELECT (-1)::bigint::nanotimestamptz::bigint, 0::bigint::nanotimestamptz::bigint;
+ int8 | int8 
+------+------
+   -1 |    0
+(1 row)
+
+SELECT '1677-09-21 00:12:43.145224192 UTC'::nanotimestamptz::bigint AS int64_min, '2262-04-11 23:47:16.854775807 UTC'::nanotimestamptz::bigint AS int64_max;
+      int64_min       |      int64_max      
+----------------------+---------------------
+ -9223372036854775808 | 9223372036854775807
+(1 row)
+
+SELECT '1677-09-21 00:12:43.145224191 UTC'::nanotimestamptz::bigint;
+ERROR:  nanotimestamptz out of range for bigint
+DETAIL:  bigint nanoseconds cover only 1677-09-21 to 2262-04-11.
+SELECT '2262-04-11 23:47:16.854775808 UTC'::nanotimestamptz::bigint;
+ERROR:  nanotimestamptz out of range for bigint
+DETAIL:  bigint nanoseconds cover only 1677-09-21 to 2262-04-11.
+SELECT castcontext FROM pg_cast WHERE castsource = 'bigint'::regtype AND casttarget = 'nanotimestamptz'::regtype;
+ castcontext 
+-------------
+ e
+(1 row)
+
+CREATE TEMP TABLE c(t nanotimestamptz);
+INSERT INTO c VALUES (5::bigint);
+ERROR:  column "t" is of type nanotimestamptz but expression is of type bigint
+LINE 1: INSERT INTO c VALUES (5::bigint);
+                              ^
+HINT:  You will need to rewrite or cast the expression.

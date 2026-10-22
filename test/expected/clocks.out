@@ -1,0 +1,73 @@
+SET timezone = 'UTC';
+SELECT provolatile, proname FROM pg_proc WHERE proname IN ('clock_ns', 'now_ns', 'statement_ns') ORDER BY proname;
+ provolatile |   proname    
+-------------+--------------
+ v           | clock_ns
+ s           | now_ns
+ s           | statement_ns
+(3 rows)
+
+-- clock_ns: has sub-microsecond digits available and is close to clock_timestamp()
+SELECT abs(extract(epoch FROM clock_ns()::timestamptz - clock_timestamp())) < 1 AS close;
+ close 
+-------
+ t
+(1 row)
+
+-- clock_ns advances across calls
+SELECT count(DISTINCT c) > 1 AS advances FROM (SELECT clock_ns() c FROM generate_series(1, 1000)) s;
+ advances 
+----------
+ t
+(1 row)
+
+-- now_ns is stable within a transaction and >= now() (floor to us)
+BEGIN;
+SELECT now_ns() AS a \gset
+SELECT pg_sleep(0.01);
+ pg_sleep 
+----------
+ 
+(1 row)
+
+SELECT now_ns() = :'a'::nanotimestamptz AS same_in_xact, now_ns()::timestamptz >= now() AS not_before_now;
+ same_in_xact | not_before_now 
+--------------+----------------
+ t            | t
+(1 row)
+
+SELECT statement_ns() > now_ns() AS later_statement;
+ later_statement 
+-----------------
+ t
+(1 row)
+
+COMMIT;
+SELECT now_ns() > :'a'::nanotimestamptz AS new_xact_new_value;
+ new_xact_new_value 
+--------------------
+ t
+(1 row)
+
+-- statement_ns is constant within one statement
+SELECT count(DISTINCT statement_ns()) FROM generate_series(1, 1000);
+ count 
+-------
+     1
+(1 row)
+
+-- DEFAULT
+CREATE TEMP TABLE ev(id int, t1 nanotimestamptz DEFAULT clock_ns(), t2 nanotimestamptz DEFAULT now_ns());
+INSERT INTO ev(id) SELECT g FROM generate_series(1, 1000) g;
+SELECT count(DISTINCT t1) > 1 AS clock_varies, count(DISTINCT t2) AS now_constant FROM ev;
+ clock_varies | now_constant 
+--------------+--------------
+ t            |            1
+(1 row)
+
+SELECT bool_and(t1 >= t2) AS clock_after_now FROM ev;
+ clock_after_now 
+-----------------
+ t
+(1 row)
+
