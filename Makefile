@@ -14,3 +14,12 @@ ifeq ($(shell test "$(PG_MAJOR)" -ge 17 2>/dev/null && echo ok),)
 $(error pg_nanotime requires PostgreSQL 17 or later; $(PG_CONFIG) reports "$(shell $(PG_CONFIG) --version)")
 endif
 include $(PGXS)
+
+# ---- release packaging (PGXN) ----
+EXTVERSION := $(shell sed -n "s/^default_version *= *'\(.*\)'/\1/p" pg_nanotime.control)
+DISTNAME   := pg_nanotime-$(EXTVERSION)
+
+.PHONY: dist
+dist:
+	git archive --format zip --prefix=$(DISTNAME)/ -o $(DISTNAME).zip HEAD
+	@echo "created $(DISTNAME).zip from HEAD (commit first; uncommitted changes are not included)"

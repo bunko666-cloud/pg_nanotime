@@ -3,3 +3,4 @@
 *.bc
 test/results/
 test/regression.*
+*.zip

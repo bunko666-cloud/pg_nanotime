@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [17, 18]
+    env:
+      PG_CONFIG: /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+      PGBIN: /usr/lib/postgresql/${{ matrix.pg }}/bin
+      PGHOST: /tmp
+      PGPORT: "5499"
+      PGUSER: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL ${{ matrix.pg }} from PGDG
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -q postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }}
+
+      - name: Build (PGXS)
+        run: make PG_CONFIG="$PG_CONFIG" COPT=-Werror
+
+      - name: Install
+        run: sudo make install PG_CONFIG="$PG_CONFIG"
+
+      - name: Start a test cluster with shared_preload_libraries = pg_nanotime
+        run: |
+          "$PGBIN/initdb" -D "$RUNNER_TEMP/pgdata" -U postgres --auth=trust
+          cat >> "$RUNNER_TEMP/pgdata/postgresql.conf" <<CONF
+          port = $PGPORT
+          unix_socket_directories = '/tmp'
+          shared_preload_libraries = 'pg_nanotime'
+          CONF
+          "$PGBIN/pg_ctl" -D "$RUNNER_TEMP/pgdata" -l "$RUNNER_TEMP/pg.log" -w start
+
+      - name: make installcheck (preloaded)
+        run: make installcheck PG_CONFIG="$PG_CONFIG"
+
+      - name: global test without shared_preload_libraries (expects global_1.out)
+        run: |
+          sed -i "s/^shared_preload_libraries = .*/shared_preload_libraries = ''/" "$RUNNER_TEMP/pgdata/postgresql.conf"
+          "$PGBIN/pg_ctl" -D "$RUNNER_TEMP/pgdata" -l "$RUNNER_TEMP/pg.log" -w restart
+          make installcheck PG_CONFIG="$PG_CONFIG" REGRESS="global"
+
+      - name: Show regression diffs
+        if: failure()
+        run: |
+          cat test/regression.diffs 2>/dev/null || true
+          cat "$RUNNER_TEMP/pg.log" 2>/dev/null || true
+
+  timescaledb:
+    name: TimescaleDB on PostgreSQL ${{ matrix.pg }} (optional)
+    runs-on: ubuntu-24.04
+    # TimescaleDB packages may lag new PostgreSQL releases; do not block CI on them.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [17, 18]
+    env:
+      PG_CONFIG: /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+      PGBIN: /usr/lib/postgresql/${{ matrix.pg }}/bin
+      PGHOST: /tmp
+      PGPORT: "5499"
+      PGUSER: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL ${{ matrix.pg }} and TimescaleDB
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-common curl gnupg
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          curl -fsSL https://packagecloud.io/timescale/timescaledb/gpgkey | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/timescaledb.gpg
+          echo "deb https://packagecloud.io/timescale/timescaledb/ubuntu/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/timescaledb.list
+          sudo apt-get update -q
+          sudo apt-get install -y -q postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }} timescaledb-2-postgresql-${{ matrix.pg }}
+
+      - name: Build and install
+        run: |
+          make PG_CONFIG="$PG_CONFIG"
+          sudo make install PG_CONFIG="$PG_CONFIG"
+
+      - name: Start cluster (timescaledb, pg_nanotime preloaded)
+        run: |
+          "$PGBIN/initdb" -D "$RUNNER_TEMP/pgdata" -U postgres --auth=trust
+          cat >> "$RUNNER_TEMP/pgdata/postgresql.conf" <<CONF
+          port = $PGPORT
+          unix_socket_directories = '/tmp'
+          shared_preload_libraries = 'timescaledb, pg_nanotime'
+          timescaledb.telemetry_level = off
+          CONF
+          "$PGBIN/pg_ctl" -D "$RUNNER_TEMP/pgdata" -l "$RUNNER_TEMP/pg.log" -w start
+
+      - name: make installcheck WITH_TIMESCALEDB=1
+        run: make installcheck PG_CONFIG="$PG_CONFIG" WITH_TIMESCALEDB=1
+
+      - name: Show regression diffs
+        if: failure()
+        run: cat test/regression.diffs 2>/dev/null || true

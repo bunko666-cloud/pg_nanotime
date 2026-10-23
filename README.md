@@ -2,7 +2,7 @@
 
 PostgreSQL 奈秒精度時間戳擴充套件，作為 [timestamp9](https://github.com/optiver/timestamp9) 的替代方案。授權：PostgreSQL License。
 
-> 狀態：**Phase 1（v0.1.0，開發中）**。
+> 狀態：**v0.1.0（Phase 1–3 完成，準備發佈）**。原始碼：`<REPO_URL>`（待填）。CI：`<CI_BADGE>`（待填）。[English summary](#english)
 >
 > **只支援 PostgreSQL 17 與 18**（已在 17.11、18.6 上建置並通過全部回歸測試）。PG 16 以下會在建置時直接報錯：Makefile 會檢查 `pg_config --version`，原始碼也有 `#error`。程式中沒有任何舊版相容碼。
 
@@ -85,15 +85,58 @@ CREATE TABLE events (
 );
 ```
 
+## 安裝
+
+需要 PostgreSQL 17 或 18 的開發套件（Debian/Ubuntu 為 `postgresql-server-dev-17` 或 `postgresql-server-dev-18`）與 C 編譯器。
+
+```sh
+git clone <REPO_URL> pg_nanotime && cd pg_nanotime
+make PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config
+sudo make install PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config
+# 或從 PGXN 安裝：pgxn install pg_nanotime（發佈後）
+```
+
+若要使用 `clock_ns_global()`，或想讓 `now_ns()` 更貼近交易開始時間，請在 `postgresql.conf` 加上以下設定，然後重新啟動：
+
+```
+shared_preload_libraries = 'pg_nanotime'      # 已用 TimescaleDB 時：'timescaledb, pg_nanotime'
+```
+
+## 快速上手
+
+```sql
+CREATE EXTENSION pg_nanotime;
+
+CREATE TABLE trades (
+  id  bigserial PRIMARY KEY,
+  t   nanotimestamptz  NOT NULL DEFAULT clock_ns(),        -- 完整範圍，16 B
+  t8  nanotimestamptz8 NOT NULL DEFAULT clock_ns8(),       -- 1677–2262，8 B
+  seq nanotimestamptz8 NOT NULL DEFAULT clock_ns8_global() -- 跨連線嚴格遞增（需要 preload）
+);
+INSERT INTO trades DEFAULT VALUES;
+SELECT t, t - lag(t) OVER (ORDER BY t) AS gap FROM trades;
+SELECT time_bucket_ns('1 second', t), count(*) FROM trades GROUP BY 1;
+
+-- 從 timestamp9 遷移：
+CALL nanotime_migrate_column('old_table', 'ts', new_default => 'clock_ns()');
+```
+
 ## 建置與測試
 
 ```sh
-make
-sudo make install
-make installcheck PGHOST=/tmp PGPORT=5499 PGUSER=postgres
+make installcheck PGHOST=/tmp PGPORT=5432 PGUSER=postgres
 ```
 
-加上 `WITH_TIMESCALEDB=1` 會多跑 `timescale` 測試。各測試檔涵蓋的範圍、所有測試結果與效能數字，請見 **[docs/TESTING.md](docs/TESTING.md)**；重現用的腳本放在 [bench/](bench/README.md)。
+- 加上 `WITH_TIMESCALEDB=1` 會多跑 `timescale` 測試。
+- 有沒有 preload 都能跑：`global` 測試準備了兩份預期結果。
+- `make dist` 會從 HEAD 產生 PGXN 用的 zip。
+
+## 文件
+
+- [docs/TESTING.md](docs/TESTING.md)：測試報告，包含環境、回歸測試、timestamp9 行為、TimescaleDB 相容性、效能、遷移與並行測試
+- [docs/TIMESCALEDB.md](docs/TIMESCALEDB.md)：TimescaleDB 使用範例
+- [bench/](bench/README.md)：重現測試用的腳本
+- [CHANGELOG.md](CHANGELOG.md)、[CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## 尚未完成
 
@@ -189,3 +232,26 @@ make installcheck PGHOST=/tmp PGPORT=5499 PGUSER=postgres
 ### TimescaleDB 輔助
 
 `ns(nanointerval)`、`nanotime_now_int8()`、`nanotime_part()`、`nanotime_part_notz()`、`nanotime_part8()`。用法範例見 **[docs/TIMESCALEDB.md](docs/TIMESCALEDB.md)**。
+
+<a id="english"></a>
+## English
+
+pg_nanotime is a PostgreSQL 17/18 extension providing nanosecond timestamps, as an alternative to timestamp9. Source: `<REPO_URL>` (to be filled in).
+
+- **Types**:
+  - `nanotimestamptz`: 16 bytes, the full PostgreSQL timestamp range.
+  - `nanotimestamptz8`: 8 bytes, int64 Unix ns, 1677–2262; binary-compatible with bigint, so TimescaleDB uses it as a native dimension.
+  - `nanotimestamp`: without time zone.
+  - `nanointerval`: fixed nanoseconds.
+  - Out-of-range input, casts and arithmetic raise errors instead of wrapping around.
+- **Indexes and functions**: B-tree, hash and BRIN; `ts - ts`, `± nanointerval` and `± interval`; `time_bucket_ns`, `date_trunc`, `extract_ns`, `timezone()`.
+- **Clocks**:
+  - `now_ns()`, `statement_ns()`, `clock_ns()` (and `*_ns8` variants).
+  - `clock_ns_monotonic()` is strictly increasing within a session.
+  - `clock_ns_global()` is strictly increasing and unique across sessions; it needs `shared_preload_libraries`.
+  - The clock is selected with `nanotime.clock_source = realtime | tai`.
+  - `nanotime_clock_status()` reports clock regressions and drift.
+- **Migration**: `nanotime_migrate_column()` converts timestamp9, bigint ns, timestamptz and timestamp columns in a single `ALTER TABLE`, rebuilding indexes.
+- **TimescaleDB**: `ns()`, `nanotime_now_int8()`, `nanotime_part*()`. See docs/TIMESCALEDB.md.
+
+Install with `make && sudo make install` (PGXS), then `CREATE EXTENSION pg_nanotime;`. Run the tests with `make installcheck`. Detailed docs are in Traditional Chinese; test results, with real measured numbers, are in docs/TESTING.md. License: PostgreSQL.
