@@ -475,3 +475,33 @@ BEGIN
     RAISE;
   END;
 END $$;
+
+-- ======================= Phase 3: strictly increasing clocks ======================
+CREATE FUNCTION clock_ns_monotonic() RETURNS nanotimestamptz AS 'MODULE_PATHNAME' LANGUAGE C VOLATILE PARALLEL RESTRICTED;
+CREATE FUNCTION clock_ns8_monotonic() RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME' LANGUAGE C VOLATILE PARALLEL RESTRICTED;
+CREATE FUNCTION clock_ns_global() RETURNS nanotimestamptz AS 'MODULE_PATHNAME' LANGUAGE C VOLATILE PARALLEL SAFE;
+CREATE FUNCTION clock_ns8_global() RETURNS nanotimestamptz8 AS 'MODULE_PATHNAME' LANGUAGE C VOLATILE PARALLEL SAFE;
+
+CREATE FUNCTION nanotime_clock_status(
+    OUT clock_source text, OUT tai_offset_s int, OUT preloaded bool,
+    OUT global_last_ns bigint, OUT global_lead_ns bigint, OUT global_calls bigint,
+    OUT global_bumps bigint, OUT global_regressions bigint, OUT global_max_regression_ns bigint,
+    OUT local_last_ns bigint, OUT local_lead_ns bigint, OUT local_calls bigint,
+    OUT local_bumps bigint, OUT local_regressions bigint, OUT local_max_regression_ns bigint)
+AS 'MODULE_PATHNAME' LANGUAGE C VOLATILE PARALLEL RESTRICTED;
+CREATE FUNCTION nanotime_reset_stats() RETURNS void AS 'MODULE_PATHNAME' LANGUAGE C VOLATILE PARALLEL RESTRICTED;
+REVOKE EXECUTE ON FUNCTION nanotime_reset_stats() FROM PUBLIC;
+
+-- ======================= Phase 3: TimescaleDB helpers ===========================
+-- STABLE bigint "now" for set_integer_now_func (transaction start, like now())
+CREATE FUNCTION nanotime_now_int8() RETURNS bigint
+    LANGUAGE sql STABLE PARALLEL SAFE AS $$ SELECT now_ns8()::bigint $$;
+-- nanointerval -> bigint ns for policy arguments: ns('7 days')
+CREATE FUNCTION ns(nanointerval) RETURNS bigint
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$ SELECT $1::bigint $$;
+-- saturating, monotonic partitioning functions for 16B types
+-- (distinct names: TimescaleDB looks partition functions up by unqualified name)
+CREATE FUNCTION nanotime_part(nanotimestamptz) RETURNS bigint AS 'MODULE_PATHNAME', 'nanotime_part' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+CREATE FUNCTION nanotime_part_notz(nanotimestamp) RETURNS bigint AS 'MODULE_PATHNAME', 'nanotime_part' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;
+-- identity mapping so nanotimestamptz8 hypertables can use set_integer_now_func
+CREATE FUNCTION nanotime_part8(nanotimestamptz8) RETURNS bigint AS 'int8up' LANGUAGE internal IMMUTABLE STRICT PARALLEL SAFE LEAKPROOF;

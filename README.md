@@ -93,13 +93,12 @@ sudo make install
 make installcheck PGHOST=/tmp PGPORT=5499 PGUSER=postgres
 ```
 
-測試（`test/sql`）：`basic`（範圍邊界、1970 前、比較）、`io`（小數位數、時區、BC、二進位往返）、`casts`（floor 取整、bigint 邊界與溢位錯誤）、`clocks`（易變性、DEFAULT）、`index`（B-tree、hash、BRIN 的索引使用）、`compact`（8 B 型別）。
+加上 `WITH_TIMESCALEDB=1` 會多跑 `timescale` 測試。各測試檔涵蓋的範圍、所有測試結果與效能數字，請見 **[docs/TESTING.md](docs/TESTING.md)**；重現用的腳本放在 [bench/](bench/README.md)。
 
-## 尚未完成（下一步）
+## 尚未完成
 
-- `nanointerval`（固定奈秒）與算術運算子、`ts - ts`。
-- `date_trunc`/`time_bucket_ns` 類函式、`infinity`。
-- TimescaleDB 連續聚合：需向上游提案。
+- `infinity`，以及依 DateStyle 輸出。
+- TimescaleDB 連續聚合：需要向上游提案。
 
 ## Phase 2：nanointerval、算術、分桶
 
@@ -154,3 +153,39 @@ make installcheck PGHOST=/tmp PGPORT=5499 PGUSER=postgres
   - 200004/200004 列的 ns 值與文字輸出完全相同。
   - 預設窗只抓到 3 列（1677、1969、2262），抓不到 2084 的繞回值，正好說明它的限制。
   - 回歸測試用一個名為 timestamp9 的 bigint domain 模擬，因為 PG 17 上沒有安裝 timestamp9。
+
+## Phase 3：嚴格遞增時鐘、時鐘來源、TimescaleDB 輔助
+
+### 嚴格遞增時鐘
+
+| 函式 | 保證 | 需求 |
+|---|---|---|
+| `clock_ns_monotonic()` / `clock_ns8_monotonic()` | 同一連線內嚴格遞增：時鐘沒有前進時取上一個值 + 1 ns。不加鎖。16 B 和 8 B 版本共用同一個計數器 | 無 |
+| `clock_ns_global()` / `clock_ns8_global()` | 跨所有連線嚴格遞增且不重複：在共享記憶體上用 atomic CAS 取 `max(now, last + 1)` | `shared_preload_libraries = 'pg_nanotime'`，否則會報出清楚的錯誤 |
+
+注意事項：
+- 保證的是「呼叫順序」，**不是** commit 順序。先取到時間的交易可能較晚 commit。
+- global 的計數器存在共享記憶體，伺服器重啟後會重來。
+- 多個連線同時大量呼叫時，global 的總速率只有一般時鐘的約 14–28%。實測數字見 [docs/TESTING.md](docs/TESTING.md) §8。
+
+### 時鐘倒退與監控
+
+`SELECT * FROM nanotime_clock_status();` 回傳以下欄位：
+- 目前的時鐘來源、核心 TAI 偏移（秒）、是否已 preload。
+- global：最後發出的值、`global_lead_ns`（領先實際時鐘的奈秒數，持續為正表示時鐘倒退過或呼叫非常密集）、呼叫次數、`bumps`（時鐘沒前進、改用 +1 ns 的次數）、倒退次數與最大倒退幅度。
+- 本連線：同樣一組數值。
+
+倒退的判定方式：同一連線讀到的時鐘值比上一次小。切換時鐘來源不算倒退。`nanotime_reset_stats()` 用來歸零計數，預設只有 superuser 能執行。時鐘倒退時，monotonic 與 global 會持續 +1 ns，直到實際時鐘追上；一般的 `clock_ns()` 則會跟著時鐘倒退。
+
+### `nanotime.clock_source = realtime | tai`
+
+- `realtime`（預設）：`CLOCK_REALTIME`，也就是 UTC。
+- `tai`：`CLOCK_TAI`。**Linux 預設的 TAI 偏移是 0**，這時讀到的值和 realtime 相同。偏移要由 chrony（`leapsectz right/UTC`）或 ptp4l/phc2sys 設定，目前約為 37 秒，可以從 `nanotime_clock_status().tai_offset_s` 確認。
+- 用 tai 寫入的值是 TAI 時間，但輸出仍標示為 UTC 格式，與 realtime 的值相差偏移量。請不要在同一個欄位混用兩種來源。
+- 這個設定會影響所有時鐘函式，可以在每個連線各自設定。
+
+`nanotime.debug_clock_offset_us` 只供測試使用（限 superuser），會在所有時鐘讀值上加上一個偏移，用來模擬時鐘倒退。
+
+### TimescaleDB 輔助
+
+`ns(nanointerval)`、`nanotime_now_int8()`、`nanotime_part()`、`nanotime_part_notz()`、`nanotime_part8()`。用法範例見 **[docs/TIMESCALEDB.md](docs/TIMESCALEDB.md)**。

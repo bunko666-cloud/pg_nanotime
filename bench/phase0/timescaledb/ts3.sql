@@ -1,0 +1,33 @@
+set timezone='UTC';
+alter table h1 set (timescaledb.compress, timescaledb.compress_segmentby='v', timescaledb.compress_orderby='t desc');
+select count(compress_chunk(c)) from show_chunks('h1') c;
+select chunk_name, is_compressed from timescaledb_information.chunks where hypertable_name='h1' order by range_start_integer;
+select * from h1 order by t;
+explain (costs off) select * from h1 where t >= '2024-01-02 00:00:00 +0000' and t < '2024-01-03 00:00:00 +0000';
+insert into h1 values ('2024-01-02 07:00:00 +0000',7);
+create table h3(t timestamp9 not null, v int); select create_hypertable('h3', by_range('t', 86400000000000));
+insert into h3 select * from h1;
+alter table h3 set (timescaledb.compress, timescaledb.compress_segmentby='t');
+select count(compress_chunk(c)) from show_chunks('h3') c;
+-- 5 caggs
+create materialized view ca1 with (timescaledb.continuous) as select time_bucket(86400000000000::bigint, t::bigint) b, count(*) from h1 group by 1;
+create function t9_now() returns timestamp9 language sql stable as $$select (extract(epoch from now())*1e9)::bigint::timestamp9$$;
+create function t9_now_ns() returns bigint language sql stable as $$select (extract(epoch from now())*1e9)::bigint$$;
+select set_integer_now_func('h1','t9_now');
+select set_integer_now_func('h1','t9_now_ns');
+create materialized view ca1 with (timescaledb.continuous) as select time_bucket(86400000000000::bigint, t::bigint) b, count(*) from h1 group by 1;
+create materialized view ca2 with (timescaledb.continuous) as select time_bucket(86400000000000, t) b, count(*) from h1 group by 1;
+create table hb(t bigint not null, v int); select create_hypertable('hb', by_range('t', 86400000000000));
+select set_integer_now_func('hb','t9_now_ns');
+insert into hb select t::bigint, v from h1;
+create materialized view cab with (timescaledb.continuous) as select time_bucket(86400000000000::bigint, t) b, count(*) from hb group by 1;
+select b::timestamp9, count from cab order by b;
+-- 6 retention
+select drop_chunks('h2', older_than => 0::bigint);
+select drop_chunks('h2', older_than => '1970-01-01 +0000'::timestamp9);
+select drop_chunks('h2', older_than => interval '1 year');
+select set_integer_now_func('h2','t9_now_ns');
+select drop_chunks('h2', older_than => 0::bigint);
+select chunk_name, range_start_integer from timescaledb_information.chunks where hypertable_name='h2' order by 2;
+select add_retention_policy('h2', drop_after => 86400000000000*365);
+select add_retention_policy('h2', drop_after => interval '1 year');

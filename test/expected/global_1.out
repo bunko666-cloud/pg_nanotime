@@ -1,0 +1,30 @@
+-- Phase 3: cross-backend strictly increasing clock (needs shared_preload_libraries).
+-- Two expected files: global.out (preloaded) and global_1.out (not preloaded).
+SET client_min_messages = warning;
+CREATE EXTENSION IF NOT EXISTS pg_nanotime;
+RESET client_min_messages;
+SELECT preloaded FROM nanotime_clock_status();
+ preloaded 
+-----------
+ f
+(1 row)
+
+SELECT clock_ns_global() IS NOT NULL AS works;
+ERROR:  clock_ns_global() requires pg_nanotime to be loaded via shared_preload_libraries
+HINT:  Add pg_nanotime to shared_preload_libraries in postgresql.conf and restart the server.
+WITH s AS (SELECT g, clock_ns8_global() t FROM generate_series(1, 200000) g),
+     d AS (SELECT t, lag(t) OVER (ORDER BY g) p FROM s)
+SELECT count(*) AS n, count(*) FILTER (WHERE t <= p) AS not_increasing,
+       count(DISTINCT t) AS distinct_values FROM d;
+ERROR:  clock_ns_global() requires pg_nanotime to be loaded via shared_preload_libraries
+HINT:  Add pg_nanotime to shared_preload_libraries in postgresql.conf and restart the server.
+SELECT clock_ns_global() < clock_ns8_global() AND clock_ns8_global() < clock_ns_global() AS shared_counter;
+ERROR:  clock_ns_global() requires pg_nanotime to be loaded via shared_preload_libraries
+HINT:  Add pg_nanotime to shared_preload_libraries in postgresql.conf and restart the server.
+SELECT global_calls > 0 AS counted, global_last_ns IS NOT NULL AS has_last, global_lead_ns < 1000000000 AS lead_small
+  FROM nanotime_clock_status();
+ counted | has_last | lead_small 
+---------+----------+------------
+         | f        | 
+(1 row)
+

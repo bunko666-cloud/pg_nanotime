@@ -21,6 +21,12 @@
 #include <ctype.h>
 
 #include "fmgr.h"
+#include "funcapi.h"
+#include "port/atomics.h"
+#include "storage/ipc.h"
+#include "storage/lwlock.h"
+#include "storage/shmem.h"
+#include "utils/guc.h"
 #include "access/xact.h"
 #include "common/hashfn.h"
 #include "executor/executor.h"
@@ -424,15 +430,281 @@ nanotimestamptz_to_int8(PG_FUNCTION_ARGS)
 
 /* --------------------------- clocks ------------------------------------ */
 
+/*
+ * Phase 3: clock source GUC, regression tracking, strictly increasing
+ * clocks (per backend and cross-backend via shared memory).
+ */
+enum
+{
+	NT_CLOCK_REALTIME = 0,
+	NT_CLOCK_TAI = 1
+};
+static const struct config_enum_entry nt_clock_source_options[] = {
+	{"realtime", NT_CLOCK_REALTIME, false},
+	{"tai", NT_CLOCK_TAI, false},
+	{NULL, 0, false}
+};
+static int	nt_clock_source = NT_CLOCK_REALTIME;
+static int	nt_debug_offset_us = 0;	/* test-only: shifts every reading */
+
+typedef struct NtShared
+{
+	pg_atomic_uint64 last;		/* last issued clock_ns_global value (int64 ns) */
+	pg_atomic_uint64 calls;
+	pg_atomic_uint64 bumps;		/* calls where clock had not advanced */
+	pg_atomic_uint64 regressions;	/* backward clock steps seen by any backend */
+	pg_atomic_uint64 max_regression;	/* largest backward step, ns */
+} NtShared;
+
+static NtShared *nt_shared = NULL;
+static shmem_request_hook_type prev_shmem_request_hook = NULL;
+static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
+
+/* per-backend state */
+static int64 loc_prev_raw = PG_INT64_MIN;	/* previous raw reading */
+static int64 loc_last = PG_INT64_MIN;	/* last clock_ns_monotonic value */
+static uint64 loc_calls = 0,
+			loc_bumps = 0,
+			loc_regressions = 0;
+static int64 loc_max_regression = 0;
+
+static void
+atomic_max_u64(pg_atomic_uint64 *a, uint64 v)
+{
+	uint64		cur = pg_atomic_read_u64(a);
+
+	while (cur < v && !pg_atomic_compare_exchange_u64(a, &cur, v))
+		;
+}
+
+static void
+nt_clock_source_assign(int newval, void *extra)
+{
+	/* switching clocks is not a regression of the clock */
+	loc_prev_raw = PG_INT64_MIN;
+}
+
+/* raw clock reading as int64 Unix ns, with regression bookkeeping */
+static int64
+read_clock_ns(void)
+{
+	struct timespec ts;
+	clockid_t	id = CLOCK_REALTIME;
+	int64		v;
+
+	if (nt_clock_source == NT_CLOCK_TAI)
+	{
+#ifdef CLOCK_TAI
+		id = CLOCK_TAI;
+#else
+		ereport(ERROR, (errmsg("CLOCK_TAI is not available on this platform")));
+#endif
+	}
+	if (clock_gettime(id, &ts) != 0)
+		ereport(ERROR, (errmsg("clock_gettime failed: %m")));
+	v = (int64) ts.tv_sec * NS_PER_SEC + ts.tv_nsec + (int64) nt_debug_offset_us * NS_PER_USEC;
+	if (v < loc_prev_raw)
+	{
+		int64		d = loc_prev_raw - v;
+
+		loc_regressions++;
+		if (d > loc_max_regression)
+			loc_max_regression = d;
+		if (nt_shared)
+		{
+			pg_atomic_fetch_add_u64(&nt_shared->regressions, 1);
+			atomic_max_u64(&nt_shared->max_regression, (uint64) d);
+		}
+	}
+	loc_prev_raw = v;
+	return v;
+}
+
 static void
 read_clock(int64 *sec, int64 *nsec)
 {
-	struct timespec ts;
+	int64		v = read_clock_ns();
 
-	if (clock_gettime(CLOCK_REALTIME, &ts) != 0)
-		ereport(ERROR, (errmsg("clock_gettime failed: %m")));
-	*sec = (int64) ts.tv_sec;
-	*nsec = (int64) ts.tv_nsec;
+	*sec = floordiv(v, NS_PER_SEC);
+	*nsec = floormod(v, NS_PER_SEC);
+}
+
+static int64
+monotonic_ns(void)
+{
+	int64		v = read_clock_ns();
+
+	loc_calls++;
+	if (v <= loc_last)
+	{
+		v = loc_last + 1;
+		loc_bumps++;
+	}
+	loc_last = v;
+	return v;
+}
+
+static int64
+global_ns(void)
+{
+	int64		now;
+	uint64		old;
+	int64		v;
+
+	if (nt_shared == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("clock_ns_global() requires pg_nanotime to be loaded via shared_preload_libraries"),
+				 errhint("Add pg_nanotime to shared_preload_libraries in postgresql.conf and restart the server.")));
+	now = read_clock_ns();
+	old = pg_atomic_read_u64(&nt_shared->last);
+	for (;;)
+	{
+		v = ((int64) old >= now) ? (int64) old + 1 : now;
+		if (pg_atomic_compare_exchange_u64(&nt_shared->last, &old, (uint64) v))
+			break;
+	}
+	pg_atomic_fetch_add_u64(&nt_shared->calls, 1);
+	if (v != now)
+		pg_atomic_fetch_add_u64(&nt_shared->bumps, 1);
+	return v;
+}
+
+static void
+nt_shmem_request(void)
+{
+	if (prev_shmem_request_hook)
+		prev_shmem_request_hook();
+	RequestAddinShmemSpace(MAXALIGN(sizeof(NtShared)));
+}
+
+static void
+nt_shmem_startup(void)
+{
+	bool		found;
+
+	if (prev_shmem_startup_hook)
+		prev_shmem_startup_hook();
+	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
+	nt_shared = ShmemInitStruct("pg_nanotime", sizeof(NtShared), &found);
+	if (!found)
+	{
+		pg_atomic_init_u64(&nt_shared->last, (uint64) PG_INT64_MIN);
+		pg_atomic_init_u64(&nt_shared->calls, 0);
+		pg_atomic_init_u64(&nt_shared->bumps, 0);
+		pg_atomic_init_u64(&nt_shared->regressions, 0);
+		pg_atomic_init_u64(&nt_shared->max_regression, 0);
+	}
+	LWLockRelease(AddinShmemInitLock);
+}
+
+static Datum
+nt_from_ns_datum(int64 v)
+{
+	return PointerGetDatum(nt_make(floordiv(v, NS_PER_SEC), floormod(v, NS_PER_SEC)));
+}
+
+PG_FUNCTION_INFO_V1(clock_ns_monotonic);
+Datum
+clock_ns_monotonic(PG_FUNCTION_ARGS)
+{
+	return nt_from_ns_datum(monotonic_ns());
+}
+
+PG_FUNCTION_INFO_V1(clock_ns8_monotonic);
+Datum
+clock_ns8_monotonic(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(monotonic_ns());
+}
+
+PG_FUNCTION_INFO_V1(clock_ns_global);
+Datum
+clock_ns_global(PG_FUNCTION_ARGS)
+{
+	return nt_from_ns_datum(global_ns());
+}
+
+PG_FUNCTION_INFO_V1(clock_ns8_global);
+Datum
+clock_ns8_global(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(global_ns());
+}
+
+PG_FUNCTION_INFO_V1(nanotime_clock_status);
+Datum
+nanotime_clock_status(PG_FUNCTION_ARGS)
+{
+	TupleDesc	tupdesc;
+	Datum		v[15];
+	bool		n[15] = {0};
+	int64		now;
+	int64		tai_off = 0;
+	bool		tai_ok = false;
+	struct timespec a,
+				b;
+
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+	tupdesc = BlessTupleDesc(tupdesc);
+
+	now = read_clock_ns();
+#ifdef CLOCK_TAI
+	if (clock_gettime(CLOCK_REALTIME, &a) == 0 && clock_gettime(CLOCK_TAI, &b) == 0)
+	{
+		/* kernel TAI offset is whole seconds; round away the read skew */
+		int64		d = ((int64) b.tv_sec - a.tv_sec) * NS_PER_SEC + (b.tv_nsec - a.tv_nsec);
+
+		tai_off = (d >= 0 ? d + NS_PER_SEC / 2 : d - NS_PER_SEC / 2) / NS_PER_SEC;
+		tai_ok = true;
+	}
+#endif
+	v[0] = CStringGetTextDatum(nt_clock_source == NT_CLOCK_TAI ? "tai" : "realtime");
+	v[1] = Int32GetDatum((int32) tai_off);
+	n[1] = !tai_ok;
+	v[2] = BoolGetDatum(nt_shared != NULL);
+	if (nt_shared)
+	{
+		int64		last = (int64) pg_atomic_read_u64(&nt_shared->last);
+
+		v[3] = Int64GetDatum(last);
+		n[3] = (last == PG_INT64_MIN);
+		v[4] = Int64GetDatum(last == PG_INT64_MIN ? 0 : last - now);
+		n[4] = (last == PG_INT64_MIN);
+		v[5] = Int64GetDatum((int64) pg_atomic_read_u64(&nt_shared->calls));
+		v[6] = Int64GetDatum((int64) pg_atomic_read_u64(&nt_shared->bumps));
+		v[7] = Int64GetDatum((int64) pg_atomic_read_u64(&nt_shared->regressions));
+		v[8] = Int64GetDatum((int64) pg_atomic_read_u64(&nt_shared->max_regression));
+	}
+	else
+		for (int i = 3; i <= 8; i++)
+			n[i] = true;
+	v[9] = Int64GetDatum(loc_last);
+	n[9] = (loc_last == PG_INT64_MIN);
+	v[10] = Int64GetDatum(loc_last == PG_INT64_MIN ? 0 : loc_last - now);
+	n[10] = (loc_last == PG_INT64_MIN);
+	v[11] = Int64GetDatum((int64) loc_calls);
+	v[12] = Int64GetDatum((int64) loc_bumps);
+	v[13] = Int64GetDatum((int64) loc_regressions);
+	v[14] = Int64GetDatum(loc_max_regression);
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, v, n)));
+}
+
+PG_FUNCTION_INFO_V1(nanotime_reset_stats);
+Datum
+nanotime_reset_stats(PG_FUNCTION_ARGS)
+{
+	loc_calls = loc_bumps = loc_regressions = 0;
+	loc_max_regression = 0;
+	if (nt_shared)
+	{
+		pg_atomic_write_u64(&nt_shared->calls, 0);
+		pg_atomic_write_u64(&nt_shared->bumps, 0);
+		pg_atomic_write_u64(&nt_shared->regressions, 0);
+		pg_atomic_write_u64(&nt_shared->max_regression, 0);
+	}
+	PG_RETURN_VOID();
 }
 
 PG_FUNCTION_INFO_V1(clock_ns);
@@ -518,6 +790,25 @@ _PG_init(void)
 {
 	prev_ExecutorStart = ExecutorStart_hook;
 	ExecutorStart_hook = nt_ExecutorStart;
+
+	DefineCustomEnumVariable("nanotime.clock_source",
+							 "Clock used by pg_nanotime clock functions.",
+							 "realtime = CLOCK_REALTIME (UTC), tai = CLOCK_TAI (offset set by the kernel; often 0 unless configured).",
+							 &nt_clock_source, NT_CLOCK_REALTIME, nt_clock_source_options,
+							 PGC_USERSET, 0, NULL, nt_clock_source_assign, NULL);
+	DefineCustomIntVariable("nanotime.debug_clock_offset_us",
+							"Testing only: offset added to every clock reading, in microseconds.",
+							NULL, &nt_debug_offset_us, 0, INT_MIN, INT_MAX,
+							PGC_SUSET, GUC_NOT_IN_SAMPLE, NULL, NULL, NULL);
+	MarkGUCPrefixReserved("nanotime");
+
+	if (process_shared_preload_libraries_in_progress)
+	{
+		prev_shmem_request_hook = shmem_request_hook;
+		shmem_request_hook = nt_shmem_request;
+		prev_shmem_startup_hook = shmem_startup_hook;
+		shmem_startup_hook = nt_shmem_startup;
+	}
 }
 
 /* ===================== nanotimestamptz8 (8 bytes) ======================= */
@@ -1785,4 +2076,20 @@ nanotimestamp_extract(PG_FUNCTION_ARGS)
 		return r;
 	return DirectFunctionCall2(extract_timestamp, PointerGetDatum(field),
 							   TimestampGetDatum(nt_to_pg_us(t)));
+}
+
+/* ============================ Phase 3: TimescaleDB ====================== */
+/* monotonic, IMMUTABLE, saturating map of 16B values to int64 ns */
+PG_FUNCTION_INFO_V1(nanotime_part);
+Datum
+nanotime_part(PG_FUNCTION_ARGS)
+{
+	NanoTimestamp *t = PG_GETARG_NT(0);
+	int128		v = (int128) t->sec * NS_PER_SEC + t->nsec;
+
+	if (v < (int128) PG_INT64_MIN)
+		PG_RETURN_INT64(PG_INT64_MIN);
+	if (v > (int128) PG_INT64_MAX)
+		PG_RETURN_INT64(PG_INT64_MAX);
+	PG_RETURN_INT64((int64) v);
 }
