@@ -2,7 +2,7 @@
 
 PostgreSQL 奈秒精度時間戳擴充套件，作為 [timestamp9](https://github.com/optiver/timestamp9) 的替代方案。授權：PostgreSQL License。
 
-> 狀態：**v0.1.0（Phase 1–3 完成，準備發佈）**。原始碼：`<REPO_URL>`（待填）。CI：`<CI_BADGE>`（待填）。[English summary](#english)
+> 狀態：**v0.1.0（Phase 1–4 完成）**。原始碼：[https://github.com/bunko666-cloud/pg_nanotime](https://github.com/bunko666-cloud/pg_nanotime)。[![CI](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml/badge.svg)](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml) [English summary](#english)
 >
 > **只支援 PostgreSQL 17 與 18**（已在 17.11、18.6 上建置並通過全部回歸測試）。PG 16 以下會在建置時直接報錯：Makefile 會檢查 `pg_config --version`，原始碼也有 `#error`。程式中沒有任何舊版相容碼。
 
@@ -90,7 +90,7 @@ CREATE TABLE events (
 需要 PostgreSQL 17 或 18 的開發套件（Debian/Ubuntu 為 `postgresql-server-dev-17` 或 `postgresql-server-dev-18`）與 C 編譯器。
 
 ```sh
-git clone <REPO_URL> pg_nanotime && cd pg_nanotime
+git clone https://github.com/bunko666-cloud/pg_nanotime pg_nanotime && cd pg_nanotime
 make PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config
 sudo make install PG_CONFIG=/usr/lib/postgresql/18/bin/pg_config
 # 或從 PGXN 安裝：pgxn install pg_nanotime（發佈後）
@@ -236,7 +236,7 @@ make installcheck PGHOST=/tmp PGPORT=5432 PGUSER=postgres
 <a id="english"></a>
 ## English
 
-pg_nanotime is a PostgreSQL 17/18 extension providing nanosecond timestamps, as an alternative to timestamp9. Source: `<REPO_URL>` (to be filled in).
+pg_nanotime is a PostgreSQL 17/18 extension providing nanosecond timestamps, as an alternative to timestamp9. Source: `https://github.com/bunko666-cloud/pg_nanotime` (to be filled in).
 
 - **Types**:
   - `nanotimestamptz`: 16 bytes, the full PostgreSQL timestamp range.

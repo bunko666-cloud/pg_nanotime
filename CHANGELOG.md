@@ -26,4 +26,4 @@
 - TimescaleDB：`ns()`、`nanotime_now_int8()`、`nanotime_part`、`nanotime_part_notz`、`nanotime_part8`。
 - 14 組回歸測試（其中 timescale 為選用）、GitHub Actions CI、PGXN META.json、`make dist`。
 
-[0.1.0]: <REPO_URL>/releases/tag/v0.1.0
+[0.1.0]: https://github.com/bunko666-cloud/pg_nanotime/releases/tag/v0.1.0

@@ -26,13 +26,13 @@
       }
    },
    "resources": {
-      "homepage": "https://github.com/REPLACE_ME/pg_nanotime",
+      "homepage": "https://github.com/bunko666-cloud/pg_nanotime",
       "bugtracker": {
-         "web": "https://github.com/REPLACE_ME/pg_nanotime/issues"
+         "web": "https://github.com/bunko666-cloud/pg_nanotime/issues"
       },
       "repository": {
-         "url": "https://github.com/REPLACE_ME/pg_nanotime.git",
-         "web": "https://github.com/REPLACE_ME/pg_nanotime",
+         "url": "https://github.com/bunko666-cloud/pg_nanotime.git",
+         "web": "https://github.com/bunko666-cloud/pg_nanotime",
          "type": "git"
       }
    },
