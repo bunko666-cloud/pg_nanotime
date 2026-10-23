@@ -11,7 +11,7 @@
       "pg_nanotime": {
          "abstract": "Types nanotimestamptz, nanotimestamptz8, nanotimestamp, nanointerval and nanosecond clocks",
          "file": "sql/pg_nanotime--0.1.0.sql",
-         "docfile": "README.md",
+         "docfile": "docs/TECHNICAL.md",
          "version": "0.1.0"
       }
    },

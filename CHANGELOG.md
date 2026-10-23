@@ -24,6 +24,7 @@
   - GUC `nanotime.clock_source`（realtime/tai）。
 - 遷移：`nanotime_migration_expr`、`nanotime_migrate_column`、`nanotime_suspect_count`。
 - TimescaleDB：`ns()`、`nanotime_now_int8()`、`nanotime_part`、`nanotime_part_notz`、`nanotime_part8`。
-- 14 組回歸測試（其中 timescale 為選用）、GitHub Actions CI、PGXN META.json、`make dist`。
+- 15 組回歸測試（其中 timescale 為選用），包含驗證 docs/EXAMPLES.md 的 `examples`；另有 GitHub Actions CI、PGXN META.json、`make dist`。
+- 文件：README 改寫成給一般使用者看的版本；原 README 內容移到 `docs/TECHNICAL.md`；新增 `docs/GUIDE.md`（依情境的使用指南）與 `docs/EXAMPLES.md`（實際執行的實例）。
 
 [0.1.0]: https://github.com/bunko666-cloud/pg_nanotime/releases/tag/v0.1.0
