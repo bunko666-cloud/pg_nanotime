@@ -2,16 +2,29 @@ name: CI
 
 on:
   push:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  # Fail fast and retry when an apt mirror stalls, instead of hanging.
+  APT_OPTS: -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
+
 jobs:
   test:
     name: PostgreSQL ${{ matrix.pg }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -27,10 +40,11 @@ jobs:
 
       - name: Install PostgreSQL ${{ matrix.pg }} from PGDG
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q postgresql-common
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get install -y -q postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }}
+          retry() { for n in 1 2 3; do timeout 300 "$@" && return 0; echo "attempt $n failed: $*"; sleep 10; done; return 1; }
+          retry sudo apt-get $APT_OPTS update -q
+          retry sudo apt-get $APT_OPTS install -y -q postgresql-common
+          retry sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          retry sudo apt-get $APT_OPTS install -y -q postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }}
 
       - name: Build (PGXS)
         run: make PG_CONFIG="$PG_CONFIG" COPT=-Werror
@@ -66,6 +80,7 @@ jobs:
   timescaledb:
     name: TimescaleDB on PostgreSQL ${{ matrix.pg }} (optional)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     # TimescaleDB packages may lag new PostgreSQL releases; do not block CI on them.
     continue-on-error: true
     strategy:
@@ -83,13 +98,14 @@ jobs:
 
       - name: Install PostgreSQL ${{ matrix.pg }} and TimescaleDB
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q postgresql-common curl gnupg
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          curl -fsSL https://packagecloud.io/timescale/timescaledb/gpgkey | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/timescaledb.gpg
+          retry() { for n in 1 2 3; do timeout 300 "$@" && return 0; echo "attempt $n failed: $*"; sleep 10; done; return 1; }
+          retry sudo apt-get $APT_OPTS update -q
+          retry sudo apt-get $APT_OPTS install -y -q postgresql-common curl gnupg
+          retry sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          curl -fsSL --retry 3 --max-time 60 https://packagecloud.io/timescale/timescaledb/gpgkey | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/timescaledb.gpg
           echo "deb https://packagecloud.io/timescale/timescaledb/ubuntu/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/timescaledb.list
-          sudo apt-get update -q
-          sudo apt-get install -y -q postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }} timescaledb-2-postgresql-${{ matrix.pg }}
+          retry sudo apt-get $APT_OPTS update -q
+          retry sudo apt-get $APT_OPTS install -y -q postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }} timescaledb-2-postgresql-${{ matrix.pg }}
 
       - name: Build and install
         run: |
