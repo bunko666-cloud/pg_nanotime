@@ -8,8 +8,9 @@
   - TimescaleDB 相關改動請加跑 `WITH_TIMESCALEDB=1`。
 - 新功能要附上 `test/sql/*.sql` 與 `test/expected/*.out`。更新 expected 檔前，請逐行檢查差異。
 - `docs/EXAMPLES.md` 的內容取自 `test/sql/examples.sql` 與 `test/expected/examples.out`；修改實例時，兩邊要一起更新（測試是準則：先改 `examples.sql` 並重新產生 `examples.out`，再同步到文件），然後執行 `make check-docs` 確認一致。CI 的「Docs examples」流程也會自動檢查。
+- 新增或修改功能時，請在同一個 commit 更新 `docs/COVERAGE.md`（物件、涵蓋的回歸測試、驗證版本、缺口）。改動前可先查該文件的「變更影響指南」決定要重跑哪些測試。
 - 效能數字請寫進 `docs/TESTING.md`，並註明環境與執行次數。只放實際量測的數字，不放估算值。
 - 程式風格：沿用 PostgreSQL 的 C 風格（tab 縮排、宣告放在區塊開頭），編譯時不能有警告（CI 用 `-Werror`）。
 - 授權：送出的貢獻以 PostgreSQL License 授權。
 
-English: PG 17/18 only. Every change must pass `make installcheck`, both with and without `shared_preload_libraries` when touching clocks. Add regression tests for new features, keep the build warning-free (CI uses `-Werror`), and report only measured numbers. Contributions are under the PostgreSQL License.
+English: PG 17/18 only. Every change must pass `make installcheck`, both with and without `shared_preload_libraries` when touching clocks. Add regression tests for new features, update docs/COVERAGE.md in the same commit, keep the build warning-free (CI uses `-Werror`), and report only measured numbers. Contributions are under the PostgreSQL License.

@@ -10,6 +10,7 @@
 - `abs(nanointerval)`（範圍對稱，最小值也能取負，不會溢位）。
 - `generate_series(start, stop, step nanointerval)`，支援 `nanotimestamptz`、`nanotimestamptz8`、`nanotimestamp`：與 PostgreSQL 語意一致（包含 stop、step 0 報錯、負 step 往回數），在型別範圍邊緣不會繞回；附 planner support 函式，常數參數時列數估計精確。
 - `nanointerval_from_ns(double precision)`（四捨五入遠離 0；NaN／Infinity 報明確錯誤；超過 2^53 ns 會失去精度，已寫入文件）與精確的 `nanointerval_from_ns(bigint)`（避免整數參數被解析到 double precision 版本）。新增回歸測試 `series`。
+- 文件：新增 `docs/COVERAGE.md` 功能與測試涵蓋表（所有物件、對應回歸測試、驗證版本、案例、缺口、變更影響指南）；CONTRIBUTING 規定功能變更要在同一個 commit 更新它。
 - 文件：說明沒有 `numeric → nanointerval` 轉型，請用 `nanointerval_from_ns(numeric)`。
 - `tools/check_examples.py` 與 `make check-docs`：檢查 `docs/EXAMPLES.md` 的程式碼區塊與 `examples` 回歸測試逐行一致。
 - GitHub Actions「Docs examples」流程：範例文件或測試變動時自動執行上述檢查（不需安裝 PostgreSQL）。

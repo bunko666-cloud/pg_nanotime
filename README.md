@@ -54,6 +54,7 @@ SELECT ts, note FROM events;   -- 例如 2026-10-23 09:00:00.123456789+08
 - [實例集（EXAMPLES）](docs/EXAMPLES.md)：交易、撮合、封包、IoT、遷移的實際執行結果
 - [技術文件（TECHNICAL）](docs/TECHNICAL.md)：完整功能、語意與設計細節
 - [測試報告（TESTING）](docs/TESTING.md)：回歸測試、效能與相容性的實測數字
+- [功能與測試涵蓋表（COVERAGE）](docs/COVERAGE.md)：每個物件由哪些測試涵蓋、已知缺口、改動時要重跑哪些測試
 - [TimescaleDB 搭配使用（TIMESCALEDB）](docs/TIMESCALEDB.md)
 - [CHANGELOG](CHANGELOG.md)、[CONTRIBUTING](CONTRIBUTING.md)
 
