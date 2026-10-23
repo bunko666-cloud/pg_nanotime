@@ -10,7 +10,7 @@ PostgreSQL 內建的時間最細只到微秒（百萬分之一秒）。對大多
 - 量測網路或程式延遲時，差距常常只有幾百奈秒（1 奈秒 = 十億分之一秒），微秒精度會直接被四捨五入掉。
 - 網路封包、感測器、科學儀器本身就輸出奈秒時間，存進資料庫時不該丟掉精度。
 
-pg_nanotime 提供奈秒精度的時間型別，以及能自動填入「現在時間」的函式，還能保證時間嚴格遞增、絕不重複。它可取代 [timestamp9](https://github.com/optiver/timestamp9)，而且超出範圍時會明確報錯，不會悄悄算錯。只支援 PostgreSQL 17 與 18。
+pg_nanotime 提供奈秒精度的時間型別，以及能自動填入「現在時間」的函式，還能保證時間嚴格遞增、絕不重複。它的靈感來自 [timestamp9](https://github.com/optiver/timestamp9)，並在此基礎上進一步發展。超出範圍時會明確報錯，不會悄悄算錯。只支援 PostgreSQL 17 與 18。
 
 ## 三步驟上手
 
@@ -60,4 +60,4 @@ SELECT ts, note FROM events;   -- 例如 2026-10-23 09:00:00.123456789+08
 <a id="english"></a>
 ## English
 
-pg_nanotime adds nanosecond-precision timestamps to PostgreSQL 17 and 18. Built-in timestamps stop at microseconds, which is not enough for trading ticks, latency measurement, packet captures or sensor data. It provides `nanotimestamptz` (the default choice; 16 bytes, full range), `nanotimestamptz8` (8 bytes, 1677–2262, TimescaleDB-friendly), `nanotimestamp` (without time zone) and `nanointerval`. It also provides clock functions usable as `DEFAULT` (`clock_ns()`, `now_ns()`), and strictly increasing clocks (`clock_ns_monotonic()`, `clock_ns_global()`). It replaces timestamp9 and raises errors instead of silently wrapping around. Quick start: `make && sudo make install`, then `CREATE EXTENSION pg_nanotime;`. The docs are in Traditional Chinese; the full English summary is in [docs/TECHNICAL.md](docs/TECHNICAL.md#english).
+pg_nanotime adds nanosecond-precision timestamps to PostgreSQL 17 and 18. Built-in timestamps stop at microseconds, which is not enough for trading ticks, latency measurement, packet captures or sensor data. It provides `nanotimestamptz` (the default choice; 16 bytes, full range), `nanotimestamptz8` (8 bytes, 1677–2262, TimescaleDB-friendly), `nanotimestamp` (without time zone) and `nanointerval`. It also provides clock functions usable as `DEFAULT` (`clock_ns()`, `now_ns()`), and strictly increasing clocks (`clock_ns_monotonic()`, `clock_ns_global()`). It was inspired by timestamp9 and builds on that idea; out-of-range values raise errors instead of wrapping around. Quick start: `make && sudo make install`, then `CREATE EXTENSION pg_nanotime;`. The docs are in Traditional Chinese; the full English summary is in [docs/TECHNICAL.md](docs/TECHNICAL.md#english).

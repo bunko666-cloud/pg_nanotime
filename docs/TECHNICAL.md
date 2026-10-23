@@ -1,6 +1,6 @@
 # pg_nanotime
 
-PostgreSQL 奈秒精度時間戳擴充套件，作為 [timestamp9](https://github.com/optiver/timestamp9) 的替代方案。授權：PostgreSQL License。
+PostgreSQL 奈秒精度時間戳擴充套件，靈感來自 [timestamp9](https://github.com/optiver/timestamp9)，並在此基礎上進一步發展。授權：PostgreSQL License。
 
 > 狀態：**v0.1.0（Phase 1–4 完成）**。原始碼：[https://github.com/bunko666-cloud/pg_nanotime](https://github.com/bunko666-cloud/pg_nanotime)。[![CI](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml/badge.svg)](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml) [English summary](#english)
 >
@@ -236,7 +236,7 @@ make installcheck PGHOST=/tmp PGPORT=5432 PGUSER=postgres
 <a id="english"></a>
 ## English
 
-pg_nanotime is a PostgreSQL 17/18 extension providing nanosecond timestamps, as an alternative to timestamp9. Source: `https://github.com/bunko666-cloud/pg_nanotime` (to be filled in).
+pg_nanotime is a PostgreSQL 17/18 extension providing nanosecond timestamps, inspired by timestamp9 and building on that idea. Source: [bunko666-cloud/pg_nanotime](https://github.com/bunko666-cloud/pg_nanotime).
 
 - **Types**:
   - `nanotimestamptz`: 16 bytes, the full PostgreSQL timestamp range.
