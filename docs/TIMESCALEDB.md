@@ -24,7 +24,20 @@ SELECT add_retention_policy('ticks', drop_after => ns('30 days'));
 ALTER TABLE ticks SET (timescaledb.compress, timescaledb.compress_segmentby = 'sym', timescaledb.compress_orderby = 't');
 ```
 
-不需要保留策略或 integer now 時，也可以不設分區函數：`by_range('t', ns('1 day'))`。
+設了 `partition_func` 時，TimescaleDB 的預設索引是 `nanotime_part8(t) DESC` 這個運算式索引，直接用 `t` 查詢的條件用不到它（chunk 排除仍有效，但 chunk 內會 seq scan）。請另外建立時間欄索引：
+
+```sql
+CREATE INDEX ON ticks (t DESC);
+```
+
+`drop_chunks` 的 `older_than` 也必須是 bigint：
+
+```sql
+SELECT drop_chunks('ticks', older_than => '2026-10-01+00'::nanotimestamptz8::bigint);  -- 可以
+SELECT drop_chunks('ticks', older_than => '2026-10-01+00'::nanotimestamptz8);          -- ERROR: invalid time argument type "nanotimestamptz8"
+```
+
+不需要保留策略或 integer now 時，也可以不設分區函數：`by_range('t', ns('1 day'))`。這時預設索引就是 `(t DESC)`，`drop_chunks(..., older_than => '...'::nanotimestamptz8)` 也可以直接用。
 
 ## 範例二：16 B 型別（需要 1677–2262 以外的範圍）
 
@@ -33,6 +46,7 @@ CREATE TABLE ev(t nanotimestamptz NOT NULL, v int);
 SELECT create_hypertable('ev', by_range('t', ns('1 day'), partition_func => 'nanotime_part'));
 SELECT set_integer_now_func('ev', 'nanotime_now_int8');
 SELECT drop_chunks('ev', older_than => nanotime_part('2000-01-01+00'));
+CREATE INDEX ON ev (t DESC);  -- 預設索引在 nanotime_part(t) 上，補一個時間欄索引
 ```
 
 1677 年以前與 2262 年以後的值會集中到兩端各一個 chunk，查詢結果仍然正確，只是那兩個 chunk 不會再細分。

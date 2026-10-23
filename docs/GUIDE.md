@@ -97,7 +97,7 @@ SELECT '2026-10-23 09:00:00.123456789+08'::nanotimestamptz::timestamptz;  -- 202
 
 ```sql
 CALL nanotime_migrate_column('events', 't', dry_run => true);  -- 只顯示要執行的 SQL
-CALL nanotime_migrate_column('events', 't');                   -- 正式轉成 nanotimestamptz
+CALL nanotime_migrate_column('events', 't');                   -- 正式轉成 nanotimestamptz（預設目標，bigint 來源也一樣）
 CALL nanotime_migrate_column('events', 't', 'nanotimestamptz8'); -- 或指定目標型別
 ```
 
@@ -115,6 +115,9 @@ SELECT create_hypertable('ticks', by_range('ts', ns('1 day')));
 
 - `nanotimestamptz8` 可以直接當 hypertable 的時間欄位。`ns('1 day')` 會把時間長度換成 TimescaleDB 需要的奈秒整數。
 - `nanotimestamptz` 需要分區函式 `nanotime_part`。
+- 有設 `partition_func`（`nanotime_part`、`nanotime_part8`）時：
+  - TimescaleDB 的預設索引建在分區運算式上，直接用 `ts` 查詢用不到，請補 `CREATE INDEX ON ticks (ts DESC);`。
+  - `drop_chunks` 的 `older_than` 要給 bigint，例如 `'2026-10-01+00'::nanotimestamptz8::bigint`。沒設分區函式時可以直接給 `nanotimestamptz8`。
 - 連續聚合（continuous aggregate）目前不支援這兩種型別。
 
 詳細步驟與限制見 [TIMESCALEDB.md](TIMESCALEDB.md)。
@@ -128,7 +131,7 @@ SELECT create_hypertable('ticks', by_range('ts', ns('1 day')));
    SELECT '2026-10-31 12:00:00-04'::nanotimestamptz + '1 day'::nanointerval;  -- 2026-11-01 11:00:00.000000000-05
    ```
 
-2. **不要混用 `now()` 與 `now_ns()`。**`now_ns()` 在交易的第一個查詢開始時才讀取時鐘，會比 `now()` 晚幾微秒。兩者混在同一欄位或互相比較時，可能出現「先發生的反而比較晚」。奈秒欄位請一律使用 pg_nanotime 的函式。
+2. **不要混用 `now()` 與 `now_ns()`。**`now_ns()` 在交易的第一個查詢開始時才讀取時鐘，會比 `now()` 晚幾微秒。擴充套件不會阻止混用（`timestamptz` 會隱式轉成 `nanotimestamptz`，`INSERT ... VALUES (now())`、`clock_ns() - now()` 都不會報錯），所以這是要自己遵守的慣例。兩者混在同一欄位或互相比較時，可能出現「先發生的反而比較晚」。奈秒欄位請一律使用 pg_nanotime 的函式。
 3. **`clock_ns()` 不保證不重複。**需要唯一、遞增的值時，請用 §3 的 monotonic 或 global 版本。
-4. **`EXTRACT(...)` 和 `AT TIME ZONE` 語法無法擴充**：請改用 `extract_ns('epoch', ts)` 與 `timezone('Asia/Taipei', ts)`。
+4. **`EXTRACT(...)` 和 `AT TIME ZONE` 語法無法擴充**：請改用 `extract_ns('epoch', ts)` 與 `timezone('Asia/Taipei', ts)`。注意 `extract_ns('nanosecond', ts)` 和 PG 的 microsecond 欄位一樣包含整數秒：`...01.000000500` 會得到 `1000000500`；只要秒以下部分時用 `% 1000000000`。
 5. **8 bytes 型別只到 2262 年。**超出範圍時會報錯，不會繞回。需要更大範圍時請改用 `nanotimestamptz`。

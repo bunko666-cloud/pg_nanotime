@@ -13,6 +13,7 @@ PostgreSQL 奈秒精度時間戳擴充套件，靈感來自 [timestamp9](https:/
 - `now_ns()` 是交易中**第一個查詢開始執行時**由本擴充套件讀取的時鐘，而 `now()` 是 PostgreSQL 在交易開始時讀取的另一個時鐘值。兩者通常相差幾微秒，`now_ns()` 比較晚。如果同一筆資料一欄用 `now()`、另一欄用 `now_ns()`，或拿 `now()` 去和 `now_ns()` 寫入的值比較，就會出現幾微秒的不一致。
 - `statement_ns()` 同理，是陳述式開始時讀取的值，同一陳述式內不變。
 - `clock_ns()` 的語意和 `clock_timestamp()` 相同：每次呼叫都即時讀取牆鐘（`CLOCK_REALTIME`），只是精度到奈秒。
+- **這是使用慣例，擴充套件不會阻止混用。**`timestamptz → nanotimestamptz` 是 IMPLICIT 轉型，所以 `INSERT INTO t(ts) VALUES (now())`、`clock_ns() - now()`、`WHERE ts > now()` 都能執行、不會報錯，但比較的是兩個不同來源的時鐘（而且 `now()` 只有微秒精度），結果可能差幾微秒。請自行在程式碼審查或欄位 DEFAULT 中統一使用 pg_nanotime 的函式。
 
 ## 型別 `nanotimestamptz`
 
@@ -48,13 +49,25 @@ PostgreSQL 奈秒精度時間戳擴充套件，靈感來自 [timestamp9](https:/
 
 ### TimescaleDB（2.31.0 實測）
 
-- 可以直接作為 hypertable 的時間維度，不需要分區函數：`create_hypertable('t', by_range('ts', 86400000000000))`。chunk 排除、壓縮、`drop_chunks(older_than => '...'::nanotimestamptz8)` 都正常。
+- 可以直接作為 hypertable 的時間維度，不需要分區函數：`create_hypertable('t', by_range('ts', 86400000000000))`。chunk 排除、壓縮、`drop_chunks(older_than => '...'::nanotimestamptz8)` 都正常，預設索引為 `(ts DESC)`。
+- 若建立時指定了 `partition_func => 'nanotime_part8'`（要用 `set_integer_now_func` 或保留策略時需要），`drop_chunks` 的 `older_than` 必須是 bigint：寫 `'...'::nanotimestamptz8::bigint`；直接給 `nanotimestamptz8` 會報 `invalid time argument type "nanotimestamptz8"`。此時 TimescaleDB 的預設索引建在 `nanotime_part8(ts)` 運算式上，直接用 `ts` 查詢用不到它（chunk 排除仍有效，但 chunk 內是 seq scan），請另外建立 `CREATE INDEX ON t (ts DESC);`。
 - **不能**使用 `set_integer_now_func` 與連續聚合：TimescaleDB 不把它當成整數維度。`time_bucket` 也沒有這個型別的版本，請用 `time_bucket(bigint, ts::bigint)::nanotimestamptz8` 查詢。需要連續聚合時，請把時間欄位存成 `bigint`。
 
 ## 運算子與索引
 
 - `< <= = <> >= >`、`min()`/`max()`、`greatest`/`least`。
 - B-tree、hash、BRIN minmax 運算子類別（都是預設）；`=` 支援 hash join 與 merge join。
+
+| 型別 | B-tree | hash | BRIN minmax | GiST / GIN |
+|---|---|---|---|---|
+| `nanotimestamptz` | ✓ | ✓ | ✓ | ✗ |
+| `nanotimestamptz8` | ✓ | ✓ | ✓ | ✗ |
+| `nanotimestamp` | ✓ | ✓ | ✓ | ✗ |
+| `nanointerval` | ✓ | ✓ | ✗ | ✗ |
+
+- 不支援 BRIN minmax-multi 與 bloom；int8 的 opclass（如 `int8_minmax_multi_ops`）也不接受 `nanotimestamptz8`。
+- GiST／GIN 沒有運算子類別（安裝 `btree_gist` 也一樣）。需要「時段不可重疊」時，可以自訂 range 型別 `CREATE TYPE nanotstzrange AS RANGE (subtype = nanotimestamptz)`，再用 `EXCLUDE USING gist`；這是 PostgreSQL 的通用機制，不在回歸測試範圍內。
+- 參考（PG 18.6，100 萬列依時間寫入的 `nanotimestamptz8`）：B-tree 21 MiB、hash 32 MiB、BRIN 24 KiB。
 
 ## 型別轉換
 
@@ -163,7 +176,7 @@ make installcheck PGHOST=/tmp PGPORT=5432 PGUSER=postgres
 ### 分桶與相關函式
 - `time_bucket_ns(width nanointerval, ts [, origin])`：兩種型別都有，回傳與輸入相同的型別。預設 origin 是 1970-01-01 UTC，向下取整（1970 年以前也正確）。width ≤ 0 會報錯。**若桶起點低於型別最小值，會夾到最小值**（例如 nt8 在 1677-09-21 那一天）。
 - `date_trunc(text, ts [, zone])`：µs 以上的單位交給 PG 的 timestamptz_trunc；`'nanosecond'` 則原值回傳。
-- `extract_ns(text, ts|nanointerval) → numeric`（`EXTRACT(... FROM ...)` 語法在 PG 中寫死，無法擴充）：epoch 精確到 9 位小數；nanosecond、microsecond、millisecond、second 都含奈秒；其他欄位交給 PG 處理。nanointerval 支援 epoch、day、hour、minute 與秒以下的欄位。
+- `extract_ns(text, ts|nanointerval) → numeric`（`EXTRACT(... FROM ...)` 語法在 PG 中寫死，無法擴充）：epoch 精確到 9 位小數；nanosecond、microsecond、millisecond、second 都含奈秒，而且和 PG 的 `EXTRACT(microsecond ...)` 一樣**包含整數秒**：`extract_ns('nanosecond', '...01.000000500+00')` 回傳 `1000000500`（1 秒 + 500 ns），`'microsecond'` 回傳 `1000000.500`；只要秒以下的部分請用 `extract_ns('nanosecond', ts) % 1000000000`；其他欄位交給 PG 處理。nanointerval 支援 epoch、day、hour、minute 與秒以下的欄位。
 
 ### nanotimestamp（不含時區）
 - 16 bytes `{int64 sec, int64 nsec}`，與 nanotimestamptz 共用程式碼。sec 是 1970-01-01 00:00:00 起算的牆上時間秒數（不含時區），語意與 PG `timestamp` 相同。範圍等同 timestamp。
@@ -182,9 +195,10 @@ make installcheck PGHOST=/tmp PGPORT=5432 PGUSER=postgres
 ## 遷移工具
 - `nanotime_migration_expr(src regtype, target regtype, col name) → text`：產生 `ALTER TABLE ... USING` 的運算式。
   - timestamp9 經由它自己的二進位 bigint 轉型 `col::bigint::nanotimestamptz`。pg_nanotime 不依賴 timestamp9，只是欄位存在時 timestamp9 必須已安裝。
-  - bigint ns 會直接轉成 nanotimestamptz8，不做任何換算。
+  - bigint ns 直接轉型，不做任何換算（`col::nanotimestamptz` 或 `col::nanotimestamptz8`，依目標型別）。
   - timestamptz、timestamp、date 是精確轉換（µs × 1000）；跨越有無時區時，依 session 時區。
 - `CALL nanotime_migrate_column(tbl, col, target DEFAULT 'nanotimestamptz', new_default DEFAULT NULL, dry_run DEFAULT false)`：
+  - 預設目標一律是 16 B `nanotimestamptz`，來源是 bigint 時也一樣；要轉成 8 B 請明確傳入 `'nanotimestamptz8'`，例如 `CALL nanotime_migrate_column('t', 'c', 'nanotimestamptz8');`。
   - 用一個 `ALTER TABLE ... TYPE ... USING` 完成。PG 會在同一個陳述式中，用新型別的預設 opclass 重建該欄位的 B-tree、hash、BRIN、unique 索引，失敗時整個回滾。
   - 舊的預設值如果無法轉換（例如 timestamp9 常數），會報錯並提示用 `new_default => 'clock_ns()'`。
   - 有 view 或 rule 依賴該欄位時，ALTER 會失敗（PG 的限制）。

@@ -8,6 +8,13 @@
 - `tools/check_examples.py` 與 `make check-docs`：檢查 `docs/EXAMPLES.md` 的程式碼區塊與 `examples` 回歸測試逐行一致。
 - GitHub Actions「Docs examples」流程：範例文件或測試變動時自動執行上述檢查（不需安裝 PostgreSQL）。
 
+### 修正
+- 文件：設了 `partition_func` 的 hypertable，`drop_chunks` 的 `older_than` 必須是 bigint（`::nanotimestamptz8::bigint`）；兩種情況都列出。
+- 文件：`nanotime_migrate_column` 的預設目標是 16 B `nanotimestamptz`（bigint 來源也一樣），要 8 B 需傳入 `'nanotimestamptz8'`。
+- 文件：`extract_ns('nanosecond', ts)` 與 PG 的 microsecond 欄位一樣包含整數秒，並附範例。
+- 文件：說明擴充套件不會阻止混用 `now()`／`timestamptz`（隱式轉型），這是使用慣例。
+- 文件：設了 `partition_func` 時 TimescaleDB 預設索引建在分區運算式上，建議另建 `(ts DESC)` 索引；TECHNICAL.md 新增索引支援矩陣。
+
 ## [0.1.0] - 2026-10-23
 
 第一個版本，只支援 PostgreSQL 17 與 18。
