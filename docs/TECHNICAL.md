@@ -2,7 +2,7 @@
 
 PostgreSQL 奈秒精度時間戳擴充套件，靈感來自 [timestamp9](https://github.com/optiver/timestamp9)，並在此基礎上進一步發展。授權：PostgreSQL License。
 
-> 狀態：**v0.2.0 開發中（最新釋出 v0.1.0，Phase 1–4 完成）**。原始碼：[https://github.com/bunko666-cloud/pg_nanotime](https://github.com/bunko666-cloud/pg_nanotime)。[![CI](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml/badge.svg)](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml) [English summary](#english)
+> 狀態：**v0.2.0 已釋出（2026-10-23，Phase 1–4 完成）**。原始碼：[https://github.com/bunko666-cloud/pg_nanotime](https://github.com/bunko666-cloud/pg_nanotime)。[![CI](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml/badge.svg)](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml) [English summary](#english)
 >
 > **只支援 PostgreSQL 17 與 18**（已在 17.11、18.6 上建置並通過全部回歸測試）。PG 16 以下會在建置時直接報錯：Makefile 會檢查 `pg_config --version`，原始碼也有 `#error`。程式中沒有任何舊版相容碼。
 >

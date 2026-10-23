@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-23
+
+升級：`ALTER EXTENSION pg_nanotime UPDATE TO '0.2.0';`（只支援 PostgreSQL 17 與 18）。
+
 ### 新增
 - `sum(nanointerval)`、`avg(nanointerval)` 聚合：int128 精確累加，溢位時報錯 `nanointerval out of range`；`avg` 四捨五入到奈秒（剛好一半時遠離 0，與 `nanointerval / bigint` 一致）；忽略 NULL，沒有資料時回傳 NULL；支援平行查詢與視窗函式移動聚合。新增回歸測試 `agg`。
 - 擴充套件版本升到 0.2.0：新增升級腳本 `pg_nanotime--0.1.0--0.2.0.sql`，可用 `ALTER EXTENSION pg_nanotime UPDATE` 從 0.1.0 升級；CI 會檢查升級後與全新安裝的物件一致。
@@ -50,4 +54,6 @@
 - 15 組回歸測試（其中 timescale 為選用），包含驗證 docs/EXAMPLES.md 的 `examples`；另有 GitHub Actions CI、PGXN META.json、`make dist`。
 - 文件：README 改寫成給一般使用者看的版本；原 README 內容移到 `docs/TECHNICAL.md`；新增 `docs/GUIDE.md`（依情境的使用指南）與 `docs/EXAMPLES.md`（實際執行的實例）。
 
+[Unreleased]: https://github.com/bunko666-cloud/pg_nanotime/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/bunko666-cloud/pg_nanotime/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bunko666-cloud/pg_nanotime/releases/tag/v0.1.0
