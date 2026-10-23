@@ -2,6 +2,12 @@
 
 格式參考 [Keep a Changelog](https://keepachangelog.com/)，版本號遵循 [SemVer](https://semver.org/)。
 
+## [Unreleased]
+
+### 新增
+- `tools/check_examples.py` 與 `make check-docs`：檢查 `docs/EXAMPLES.md` 的程式碼區塊與 `examples` 回歸測試逐行一致。
+- GitHub Actions「Docs examples」流程：範例文件或測試變動時自動執行上述檢查（不需安裝 PostgreSQL）。
+
 ## [0.1.0] - 2026-10-23
 
 第一個版本，只支援 PostgreSQL 17 與 18。

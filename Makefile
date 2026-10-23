@@ -23,3 +23,8 @@ DISTNAME   := pg_nanotime-$(EXTVERSION)
 dist:
 	git archive --format zip --prefix=$(DISTNAME)/ -o $(DISTNAME).zip HEAD
 	@echo "created $(DISTNAME).zip from HEAD (commit first; uncommitted changes are not included)"
+
+# ---- docs consistency: docs/EXAMPLES.md vs the examples regression test ----
+.PHONY: check-docs
+check-docs:
+	python3 tools/check_examples.py

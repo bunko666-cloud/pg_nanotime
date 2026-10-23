@@ -1,0 +1,30 @@
+name: Docs examples
+
+on:
+  push:
+    paths:
+      - docs/EXAMPLES.md
+      - test/sql/examples.sql
+      - test/expected/examples.out
+      - tools/check_examples.py
+      - .github/workflows/docs.yml
+  pull_request:
+    paths:
+      - docs/EXAMPLES.md
+      - test/sql/examples.sql
+      - test/expected/examples.out
+      - tools/check_examples.py
+      - .github/workflows/docs.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-examples:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check docs/EXAMPLES.md matches the examples regression test
+        run: python3 tools/check_examples.py

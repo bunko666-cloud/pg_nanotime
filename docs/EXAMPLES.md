@@ -1,6 +1,6 @@
 # pg_nanotime 實例集
 
-以下每段 SQL 與輸出都是在 PostgreSQL 17.11 與 18.6 上實際執行的結果（兩版輸出完全相同），直接取自回歸測試 [`test/sql/examples.sql`](../test/sql/examples.sql) 與 [`test/expected/examples.out`](../test/expected/examples.out)。每次 `make installcheck` 都會重跑，所以文件與實際行為保持一致。
+以下每段 SQL 與輸出都是在 PostgreSQL 17.11 與 18.6 上實際執行的結果（兩版輸出完全相同），直接取自回歸測試 [`test/sql/examples.sql`](../test/sql/examples.sql) 與 [`test/expected/examples.out`](../test/expected/examples.out)。每次 `make installcheck` 都會重跑，另外 `make check-docs`（`tools/check_examples.py`）與 CI 會逐行比對本文件的程式碼區塊與測試檔，不一致就失敗，所以文件與實際行為保持一致。
 
 共同設定：`SET timezone = 'UTC';`。與現在時間有關的值都改用固定字面值，或只顯示計數，不顯示時間本身。
 
