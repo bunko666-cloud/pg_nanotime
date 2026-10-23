@@ -1,4 +1,4 @@
 comment = 'nanosecond-precision timestamp types'
-default_version = '0.1.0'
+default_version = '0.2.0'
 module_pathname = '$libdir/pg_nanotime'
 relocatable = true

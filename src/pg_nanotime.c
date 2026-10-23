@@ -2093,3 +2093,162 @@ nanotime_part(PG_FUNCTION_ARGS)
 		PG_RETURN_INT64(PG_INT64_MAX);
 	PG_RETURN_INT64((int64) v);
 }
+
+/* ------------------------- sum / avg (nanointerval) ---------------------- */
+
+/*
+ * Aggregate state: exact int128 running total of nanoseconds plus a row
+ * count.  Any single nanointerval is < 2^73 ns, so the int128 total cannot
+ * realistically overflow, but every addition is still checked.  The final
+ * function range-checks the result, so sum() errors with "nanointerval out
+ * of range" instead of wrapping.  avg() divides with the same rounding as
+ * the nanointerval / bigint operator (half away from zero).
+ */
+typedef struct NiAggState
+{
+	int128		sum;
+	int64		count;
+} NiAggState;
+
+static NiAggState *
+ni_agg_state(FunctionCallInfo fcinfo, int argno)
+{
+	MemoryContext aggctx;
+
+	if (!AggCheckCallContext(fcinfo, &aggctx))
+		elog(ERROR, "nanointerval aggregate function called in non-aggregate context");
+	if (PG_ARGISNULL(argno))
+		return (NiAggState *) MemoryContextAllocZero(aggctx, sizeof(NiAggState));
+	return (NiAggState *) PG_GETARG_POINTER(argno);
+}
+
+static void
+ni_agg_add(NiAggState *st, int128 v, int64 n)
+{
+	if (__builtin_add_overflow(st->sum, v, &st->sum) ||
+		__builtin_add_overflow(st->count, n, &st->count))
+		ni_range_error();
+}
+
+PG_FUNCTION_INFO_V1(nanointerval_accum);
+Datum
+nanointerval_accum(PG_FUNCTION_ARGS)
+{
+	NiAggState *st;
+
+	if (PG_ARGISNULL(1))
+	{
+		if (PG_ARGISNULL(0))
+			PG_RETURN_NULL();
+		PG_RETURN_POINTER(PG_GETARG_POINTER(0));
+	}
+	st = ni_agg_state(fcinfo, 0);
+	ni_agg_add(st, nt_total(PG_GETARG_NI(1)), 1);
+	PG_RETURN_POINTER(st);
+}
+
+PG_FUNCTION_INFO_V1(nanointerval_accum_inv);
+Datum
+nanointerval_accum_inv(PG_FUNCTION_ARGS)
+{
+	NiAggState *st;
+
+	if (PG_ARGISNULL(1))
+	{
+		if (PG_ARGISNULL(0))
+			PG_RETURN_NULL();
+		PG_RETURN_POINTER(PG_GETARG_POINTER(0));
+	}
+	st = ni_agg_state(fcinfo, 0);
+	ni_agg_add(st, -nt_total(PG_GETARG_NI(1)), -1);
+	PG_RETURN_POINTER(st);
+}
+
+PG_FUNCTION_INFO_V1(nanointerval_agg_combine);
+Datum
+nanointerval_agg_combine(PG_FUNCTION_ARGS)
+{
+	NiAggState *st;
+	NiAggState *other;
+
+	if (PG_ARGISNULL(1))
+	{
+		if (PG_ARGISNULL(0))
+			PG_RETURN_NULL();
+		PG_RETURN_POINTER(PG_GETARG_POINTER(0));
+	}
+	other = (NiAggState *) PG_GETARG_POINTER(1);
+	st = ni_agg_state(fcinfo, 0);
+	ni_agg_add(st, other->sum, other->count);
+	PG_RETURN_POINTER(st);
+}
+
+PG_FUNCTION_INFO_V1(nanointerval_agg_serialize);
+Datum
+nanointerval_agg_serialize(PG_FUNCTION_ARGS)
+{
+	NiAggState *st = (NiAggState *) PG_GETARG_POINTER(0);
+	StringInfoData buf;
+
+	if (!AggCheckCallContext(fcinfo, NULL))
+		elog(ERROR, "nanointerval aggregate function called in non-aggregate context");
+	pq_begintypsend(&buf);
+	pq_sendint64(&buf, (int64) (st->sum >> 64));
+	pq_sendint64(&buf, (int64) (uint64) st->sum);
+	pq_sendint64(&buf, st->count);
+	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+}
+
+PG_FUNCTION_INFO_V1(nanointerval_agg_deserialize);
+Datum
+nanointerval_agg_deserialize(PG_FUNCTION_ARGS)
+{
+	bytea	   *b = PG_GETARG_BYTEA_PP(0);
+	StringInfoData buf;
+	NiAggState *st;
+	int64		hi;
+	uint64		lo;
+
+	if (!AggCheckCallContext(fcinfo, NULL))
+		elog(ERROR, "nanointerval aggregate function called in non-aggregate context");
+	initReadOnlyStringInfo(&buf, VARDATA_ANY(b), VARSIZE_ANY_EXHDR(b));
+	st = (NiAggState *) palloc(sizeof(NiAggState));
+	hi = pq_getmsgint64(&buf);
+	lo = (uint64) pq_getmsgint64(&buf);
+	st->sum = (int128) (((uint128) (uint64) hi << 64) | lo);
+	st->count = pq_getmsgint64(&buf);
+	pq_getmsgend(&buf);
+	PG_RETURN_POINTER(st);
+}
+
+PG_FUNCTION_INFO_V1(nanointerval_sum_final);
+Datum
+nanointerval_sum_final(PG_FUNCTION_ARGS)
+{
+	NiAggState *st = PG_ARGISNULL(0) ? NULL : (NiAggState *) PG_GETARG_POINTER(0);
+
+	if (st == NULL || st->count == 0)
+		PG_RETURN_NULL();
+	PG_RETURN_POINTER(ni_make(st->sum));
+}
+
+PG_FUNCTION_INFO_V1(nanointerval_avg_final);
+Datum
+nanointerval_avg_final(PG_FUNCTION_ARGS)
+{
+	NiAggState *st = PG_ARGISNULL(0) ? NULL : (NiAggState *) PG_GETARG_POINTER(0);
+	int128		q,
+				r,
+				a,
+				b;
+
+	if (st == NULL || st->count == 0)
+		PG_RETURN_NULL();
+	a = st->sum;
+	b = st->count;
+	q = a / b;
+	r = a % b;
+	if (r != 0 && 2 * (r < 0 ? -r : r) >= b)
+		q += (a < 0) ? -1 : 1;
+	PG_RETURN_POINTER(ni_make(q));
+}

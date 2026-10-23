@@ -1,0 +1,134 @@
+-- sum(nanointerval) / avg(nanointerval)
+SET client_min_messages = warning;
+CREATE EXTENSION IF NOT EXISTS pg_nanotime;
+RESET client_min_messages;
+CREATE TABLE agg_t (g int, d nanointerval);
+INSERT INTO agg_t VALUES
+  (1, '1.000000001'), (1, '2.5'), (1, NULL),
+  (2, '-3 ms'), (2, '1 ns'), (2, '2 ns'),
+  (3, NULL);
+SELECT g, sum(d), avg(d), count(d) FROM agg_t GROUP BY g ORDER BY g;
+ g |         sum         |         avg         | count 
+---+---------------------+---------------------+-------
+ 1 | 00:00:03.500000001  | 00:00:01.750000001  |     2
+ 2 | -00:00:00.002999997 | -00:00:00.000999999 |     3
+ 3 |                     |                     |     0
+(3 rows)
+
+-- empty input and all-NULL input give NULL
+SELECT sum(d), avg(d) FROM agg_t WHERE false;
+ sum | avg 
+-----+-----
+     | 
+(1 row)
+
+SELECT sum(d) IS NULL AS s_null, avg(d) IS NULL AS a_null FROM agg_t WHERE g = 3;
+ s_null | a_null 
+--------+--------
+ t      | t
+(1 row)
+
+-- avg rounds half away from zero, same as nanointerval / bigint
+SELECT avg(d) FROM (VALUES ('1 ns'::nanointerval), ('2 ns')) v(d);
+        avg         
+--------------------
+ 00:00:00.000000002
+(1 row)
+
+SELECT avg(d) FROM (VALUES ('-1 ns'::nanointerval), ('-2 ns')) v(d);
+         avg         
+---------------------
+ -00:00:00.000000002
+(1 row)
+
+SELECT avg(d) FROM (VALUES ('1 ns'::nanointerval), ('1 ns'), ('2 ns')) v(d);
+        avg         
+--------------------
+ 00:00:00.000000001
+(1 row)
+
+SELECT '3 ns'::nanointerval / 2 AS div_pos, '-3 ns'::nanointerval / 2 AS div_neg;
+      div_pos       |       div_neg       
+--------------------+---------------------
+ 00:00:00.000000002 | -00:00:00.000000002
+(1 row)
+
+-- exact: matches nanointerval_ns(numeric) arithmetic
+SELECT nanointerval_ns(sum(d)) = sum(nanointerval_ns(d)) AS exact FROM agg_t;
+ exact 
+-------
+ t
+(1 row)
+
+-- overflow is an error, never a silent wrap
+SELECT sum(d) FROM (VALUES (nanointerval_from_ns(9000000000000000000000)),
+                           (nanointerval_from_ns(9000000000000000000000))) v(d);
+ERROR:  nanointerval out of range
+-- intermediate overflow that comes back into range is fine (exact state)
+SELECT sum(d) FROM (VALUES (nanointerval_from_ns(9000000000000000000000)),
+                           (nanointerval_from_ns(9000000000000000000000)),
+                           (nanointerval_from_ns(-9000000000000000000000))) v(d);
+                sum                
+-----------------------------------
+ 104166666 days 16:00:00.000000000
+(1 row)
+
+-- window functions (moving aggregate with inverse transition)
+SELECT i, sum(d) OVER w, avg(d) OVER w
+FROM (SELECT i, (i || ' ms')::nanointerval AS d FROM generate_series(1, 5) i) s
+WINDOW w AS (ORDER BY i ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)
+ORDER BY i;
+ i |        sum         |        avg         
+---+--------------------+--------------------
+ 1 | 00:00:00.003000000 | 00:00:00.001500000
+ 2 | 00:00:00.006000000 | 00:00:00.002000000
+ 3 | 00:00:00.009000000 | 00:00:00.003000000
+ 4 | 00:00:00.012000000 | 00:00:00.004000000
+ 5 | 00:00:00.009000000 | 00:00:00.004500000
+(5 rows)
+
+SELECT i, sum(d) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM (VALUES (1, '1 s'::nanointerval), (2, NULL), (3, NULL), (4, '2 s')) v(i, d) ORDER BY i;
+ i |        sum         
+---+--------------------
+ 1 | 00:00:01.000000000
+ 2 | 00:00:01.000000000
+ 3 | 
+ 4 | 00:00:02.000000000
+(4 rows)
+
+-- parallel plan: partial aggregate + combine + serialize/deserialize
+CREATE TABLE agg_big AS
+  SELECT nanointerval_from_ns(i * 1000 + (i % 7)) AS d FROM generate_series(1, 200000) i;
+ANALYZE agg_big;
+SET parallel_setup_cost = 0;
+SET parallel_tuple_cost = 0;
+SET min_parallel_table_scan_size = 0;
+SET max_parallel_workers_per_gather = 2;
+EXPLAIN (COSTS OFF) SELECT sum(d), avg(d) FROM agg_big;
+                   QUERY PLAN                   
+------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 2
+         ->  Partial Aggregate
+               ->  Parallel Seq Scan on agg_big
+(5 rows)
+
+SELECT sum(d), avg(d) FROM agg_big;
+        sum         |        avg         
+--------------------+--------------------
+ 05:33:20.100599997 | 00:00:00.100000503
+(1 row)
+
+RESET max_parallel_workers_per_gather;
+SELECT sum(d), avg(d) FROM agg_big;
+        sum         |        avg         
+--------------------+--------------------
+ 05:33:20.100599997 | 00:00:00.100000503
+(1 row)
+
+RESET parallel_setup_cost;
+RESET parallel_tuple_cost;
+RESET min_parallel_table_scan_size;
+DROP TABLE agg_t, agg_big;

@@ -73,7 +73,7 @@ SELECT recv_ts - exch_ts AS latency FROM ticks;            -- 00:00:00.000041250
 SELECT (recv_ts - exch_ts)::bigint AS latency_ns FROM ticks; -- 41250
 ```
 
-要算平均、百分位數時，先轉成 bigint 奈秒再用 PostgreSQL 內建的聚合函式（`avg`、`percentile_disc`）。比較門檻時寫 `> '50 microseconds'::nanointerval`。完整例子見 [EXAMPLES §1](EXAMPLES.md#1-交易-tick-資料與延遲統計)。
+0.2.0 起可以直接對 `nanointerval` 用 `sum()`、`avg()`（精確累加；`avg` 四捨五入到奈秒，剛好一半時遠離 0）。百分位數仍要先轉成 bigint 奈秒，再用 PostgreSQL 內建的 `percentile_disc`。把奈秒數字轉回來請用 `nanointerval_from_ns(numeric)`，沒有 `numeric::nanointerval` 轉型。比較門檻時寫 `> '50 microseconds'::nanointerval`。完整例子見 [EXAMPLES §1](EXAMPLES.md#1-交易-tick-資料與延遲統計)。
 
 ## 5. 依時間分桶統計：`time_bucket_ns`
 

@@ -5,6 +5,9 @@
 ## [Unreleased]
 
 ### 新增
+- `sum(nanointerval)`、`avg(nanointerval)` 聚合：int128 精確累加，溢位時報錯 `nanointerval out of range`；`avg` 四捨五入到奈秒（剛好一半時遠離 0，與 `nanointerval / bigint` 一致）；忽略 NULL，沒有資料時回傳 NULL；支援平行查詢與視窗函式移動聚合。新增回歸測試 `agg`。
+- 擴充套件版本升到 0.2.0：新增升級腳本 `pg_nanotime--0.1.0--0.2.0.sql`，可用 `ALTER EXTENSION pg_nanotime UPDATE` 從 0.1.0 升級；CI 會檢查升級後與全新安裝的物件一致。
+- 文件：說明沒有 `numeric → nanointerval` 轉型，請用 `nanointerval_from_ns(numeric)`。
 - `tools/check_examples.py` 與 `make check-docs`：檢查 `docs/EXAMPLES.md` 的程式碼區塊與 `examples` 回歸測試逐行一致。
 - GitHub Actions「Docs examples」流程：範例文件或測試變動時自動執行上述檢查（不需安裝 PostgreSQL）。
 

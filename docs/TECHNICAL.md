@@ -2,7 +2,7 @@
 
 PostgreSQL 奈秒精度時間戳擴充套件，靈感來自 [timestamp9](https://github.com/optiver/timestamp9)，並在此基礎上進一步發展。授權：PostgreSQL License。
 
-> 狀態：**v0.1.0（Phase 1–4 完成）**。原始碼：[https://github.com/bunko666-cloud/pg_nanotime](https://github.com/bunko666-cloud/pg_nanotime)。[![CI](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml/badge.svg)](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml) [English summary](#english)
+> 狀態：**v0.2.0 開發中（最新釋出 v0.1.0，Phase 1–4 完成）**。原始碼：[https://github.com/bunko666-cloud/pg_nanotime](https://github.com/bunko666-cloud/pg_nanotime)。[![CI](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml/badge.svg)](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml) [English summary](#english)
 >
 > **只支援 PostgreSQL 17 與 18**（已在 17.11、18.6 上建置並通過全部回歸測試）。PG 16 以下會在建置時直接報錯：Makefile 會檢查 `pg_config --version`，原始碼也有 `#error`。程式中沒有任何舊版相容碼。
 
@@ -165,7 +165,8 @@ make installcheck PGHOST=/tmp PGPORT=5432 PGUSER=postgres
 - 輸入：單位字（ns/us/ms/s/min/h/d/w 及全名）、`HH:MM[:SS.f]`、`@`、`ago`、純數字（秒）、ISO 8601 `P..T..`。month/year 會報錯並提示改用 interval；比 1 ns 更細也會報錯。
 - 運算子：比較、B-tree、hash、一元 `-`、`+`、`-`、`* / int`（/ 四捨五入，遠離 0）、`* / numeric`。`smallint` 需要先轉型（不然會有 `operator is not unique`）。
 - 轉型：`interval ↔ nanointerval` 是 ASSIGNMENT 轉型。從 interval 轉入時，有月份或 infinity 會報錯，**1 day 當作 24 小時**。轉成 interval 時會向下取整到 µs。`bigint ↔ nanointerval`（奈秒）只能明確轉型。
-- `nanointerval_ns(x) → numeric`、`nanointerval_from_ns(numeric)`。
+- `nanointerval_ns(x) → numeric`、`nanointerval_from_ns(numeric)`：`nanointerval_from_ns` 接受 numeric（整數與 bigint 會自動轉成 numeric），先四捨五入到整數奈秒（遠離 0），超出範圍會報錯。**沒有 `numeric → nanointerval` 轉型**，`1500::numeric::nanointerval` 會報 `cannot cast type numeric to nanointerval`；請寫 `nanointerval_from_ns(1500)`（→ `00:00:00.000001500`），整數奈秒也可以寫 `1500::bigint::nanointerval`。
+- 聚合（0.2.0 起）：`min`、`max`、`sum`、`avg`。`sum`／`avg` 以 int128 精確累加奈秒並計數，不會有浮點誤差；結果超出範圍時報錯 `nanointerval out of range`，不會繞回。`avg` 四捨五入到最近的奈秒，剛好一半時遠離 0（與 `nanointerval / bigint` 一致：1 ns 與 2 ns 平均是 2 ns，-1 ns 與 -2 ns 是 -2 ns）。NULL 會被忽略，沒有資料列或全為 NULL 時回傳 NULL。支援平行查詢（combine／serialize）與視窗函式的移動聚合（inverse transition）。
 
 ### 算術（兩種時間型別都有，溢位都會報錯）
 - `ts − ts → nanointerval`
