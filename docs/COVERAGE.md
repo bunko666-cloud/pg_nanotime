@@ -98,7 +98,7 @@ I/O（文字與 binary send/recv）：io（16 B）、compact（8 B）、notz、i
 | `min` / `max`（4 型別各一，共 8 個） | 最小／最大，可平行 | basic, agg（nanointerval） | PG17/18，0.1.0 | 11, 14, 教 | |
 | `sum(nanointerval)` | int128 精確累加，溢位報錯 | agg | PG17/18，**0.2.0** | 11, 14 | 支援平行（combine/serialize）與移動聚合 |
 | `avg(nanointerval)` | 平均，四捨五入到奈秒（遠離 0） | agg, examples | PG17/18，**0.2.0** | 11, 14 | 同上 |
-| `percentile_disc(…) WITHIN GROUP (ORDER BY nanointerval)` | PG 內建聚合，只要排序 | **無**（examples 只測 `::bigint` 版本） | 案例 5, 9, 11, 14 在 PG18 跑過 | 5, 9, 11, 14 | `percentile_cont` 不支援 nanointerval（需要內插），要先 `::bigint` |
+| `percentile_disc(…) WITHIN GROUP (ORDER BY nanointerval)` | PG 內建聚合，只要排序 | coverage（含陣列版本、NULL、`percentile_cont` 報錯） | PG17/18 | 5, 9, 11, 14 | `percentile_cont` 不支援 nanointerval（需要內插），要先 `::bigint` |
 
 ## 5. 轉型
 
@@ -125,14 +125,14 @@ I/O（文字與 binary send/recv）：io（16 B）、compact（8 B）、notz、i
 
 | 物件 | 用途／應用 | 回歸測試 | 案例 | 已知限制／備註 |
 |---|---|---|---|---|
-| `= <> < <= > >=`（4 型別 × 6） | 比較、排序、索引 | basic, index, compact, notz, interval | 全部 | `<>` 只在 basic（nanotimestamptz）明確測過，其他型別靠 NEGATOR 與共用比較函式 |
+| `= <> < <= > >=`（4 型別 × 6） | 比較、排序、索引 | basic, index, compact, notz, interval, coverage（其他 3 型別的 `<>`） | 全部 | |
 | `ts - ts → nanointerval`（3 型別） | 時間差 | arith, compact, notz | 2, 4, 5, 9, 11, 14 | |
 | `ts ± nanointerval`、`nanointerval + ts`（3 型別） | 固定奈秒加減 | arith, notz | 13, 教 | 越界報錯，不繞回 |
-| `ts ± interval`（3 型別） | 日曆運算，依 session 時區 | arith（16 B、8 B 的 `+`）, notz | 13, 教 | `nanotimestamptz8 - interval` 沒有回歸測試（見 §9） |
-| `interval + ts`（3 型別） | 交換律版本 | notz（nanotimestamp） | — | 16 B 與 8 B 版本沒有回歸測試（見 §9） |
+| `ts ± interval`（3 型別） | 日曆運算，依 session 時區 | arith, coverage（8 B 的 `-`）, notz | 13, 教 | |
+| `interval + ts`（3 型別） | 交換律版本 | notz, coverage | — | |
 | `nanointerval ± nanointerval`、一元 `-` | 長度加減 | interval, series | 13 | |
-| `nanointerval * int4 \| int8 \| numeric`、反向 `int4 \| numeric * nanointerval` | 乘倍率 | interval | 13, 14 | `bigint * nanointerval` 沒有回歸測試（見 §9）；smallint 會 operator is not unique |
-| `nanointerval / int4 \| int8 \| numeric` | 除，四捨五入遠離 0 | interval | 13 | `/ bigint` 沒有直接測（int4 版本是包裝 int8 版本，實作有被走到） |
+| `nanointerval * int4 \| int8 \| numeric`、反向 `int4 \| numeric * nanointerval` | 乘倍率 | interval, coverage（`bigint *`） | 13, 14 | smallint 會 operator is not unique |
+| `nanointerval / int4 \| int8 \| numeric` | 除，四捨五入遠離 0 | interval, coverage（`/ bigint`） | 13 | |
 
 ## 7. 索引 opclass 與 GUC
 
@@ -193,16 +193,12 @@ CI 的 `paths-ignore` 排除 `**.md` 與 `docs/**`，只改文件時不會觸發
 
 ## 9. 沒有回歸測試的物件（缺口）
 
-以下是比對測試 SQL 後找到的缺口。實作大多與有測試的版本共用程式碼，風險不高，但目前沒有任何回歸測試直接呼叫它們：
+原本列在這裡的 6 個運算子／聚合缺口（`interval + nanotimestamptz`／`nanotimestamptz8`、`nanotimestamptz8 - interval`、`bigint * nanointerval`、`nanointerval / bigint`、其他 3 型別的 `<>`、`percentile_disc` 直接用在 nanointerval）已在 0.2.0 由 `coverage` 測試補上（PG17.11／18.6 通過）。
+
+目前剩下的都是無法或不適合放進回歸測試的項目：
 
 | 物件 | 現況 | 建議 |
 |---|---|---|
-| `interval + nanotimestamptz`、`interval + nanotimestamptz8` | 只有 `nanotimestamp` 版本有測 | 在 arith 加交換律檢查 |
-| `nanotimestamptz8 - interval` | `+ interval` 有測，`-` 沒有 | 在 arith 補一行 |
-| `bigint * nanointerval` | `nanointerval * bigint` 有測 | 在 interval 補一行 |
-| `nanointerval / bigint` | 只透過 int4 包裝間接執行 | 在 interval 補 `/ 3::bigint` |
-| `<>`（`nanotimestamptz8`、`nanotimestamp`、`nanointerval`） | 只有 `nanotimestamptz` 明確測過 | 在各型別測試補 `<>` |
-| `percentile_disc` 直接用在 `nanointerval` | 只在案例頁執行過；examples 用 `::bigint` | 在 agg 補一個查詢（`percentile_cont` 的錯誤也一起測） |
 | 自訂 range + GiST EXCLUDE | 只在教學頁實測 | 屬 PG 通用機制，維持不列入 |
 | 真實 timestamp9 遷移 | 回歸測試用 bigint domain 模擬；真實資料只在 PG18 手動測過 | CI 沒有 timestamp9 套件，維持手動 |
 | `nanotime.clock_source = tai` 的實際偏移 | 機器 TAI 偏移為 0，只驗證了切換本身 | 需要設好 chrony／ptp4l 的環境 |
@@ -228,9 +224,9 @@ CI 的 `paths-ignore` 排除 `**.md` 與 `docs/**`，只改文件時不會觸發
 | 改到 | 要重跑 | 不必重跑 |
 |---|---|---|
 | I/O（輸入解析、輸出格式、send/recv） | io, compact, notz, interval, examples；`make check-docs`；考慮 TESTING §5 COPY 數字 | 時鐘、遷移、TimescaleDB 實測 |
-| 比較函式、hash、opclass | basic, index, compact, notz, interval, migrate；必要時重量教學 4.5 的大小 | 時鐘 |
-| 算術、捨入、溢位（`nt_total`、`ni_make` 等） | arith, interval, agg, series, bucket, notz | 時鐘、遷移實測 |
-| 聚合（sum/avg 狀態、combine、serialize） | agg（含平行與移動聚合）, examples | 其他 |
+| 比較函式、hash、opclass | basic, index, compact, notz, interval, coverage, migrate；必要時重量教學 4.5 的大小 | 時鐘 |
+| 算術、捨入、溢位（`nt_total`、`ni_make` 等） | arith, interval, agg, series, coverage, bucket, notz | 時鐘、遷移實測 |
+| 聚合（sum/avg 狀態、combine、serialize） | agg（含平行與移動聚合）, coverage, examples | 其他 |
 | `generate_series` 或其 support 函式 | series | 其他 |
 | 時鐘（clock／monotonic／global、GUC） | clocks, monotonic, global（有 preload 與沒有 preload 兩次）, compact；TESTING §5 時鐘成本、§8 並行 | I/O、遷移 |
 | 轉型 | casts, compact, notz, interval, migrate | 時鐘 |
