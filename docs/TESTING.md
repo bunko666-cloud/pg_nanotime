@@ -12,7 +12,7 @@
 | TimescaleDB | 2.31.0（Timescale 官方套件） |
 | timestamp9 | 1.4.0，commit 2d689f8，CMake 建置（只裝在 PG 18） |
 | 編譯 | PGXS，PG 17 與 18 都是 0 警告 |
-| pg_nanotime commit | Phase 1：1f834c2、4dfddc5；Phase 2：7a4c705、5287e71、7fcee8c；Phase 3：見 `git log` |
+| pg_nanotime commit | Phase 1：1f834c2、4dfddc5；Phase 2：7a4c705、5287e71、7fcee8c；Phase 3：e04a96b（文件更新在其後的 commit） |
 | 核心 TAI 偏移 | 0 秒（這台機器沒有設定，見 §8） |
 
 這是共享虛擬機，同一個測試重跑一次常有 10–20% 的差距，偶爾會出現明顯的異常值。只差幾個百分點的結果請視為打平。
