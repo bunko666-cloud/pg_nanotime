@@ -2,7 +2,7 @@
 
 格式參考 [Keep a Changelog](https://keepachangelog.com/)，版本號遵循 [SemVer](https://semver.org/)。
 
-## [0.1.0] - 未發佈
+## [0.1.0] - 2026-10-23
 
 第一個版本，只支援 PostgreSQL 17 與 18。
 
