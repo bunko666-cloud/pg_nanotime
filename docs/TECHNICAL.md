@@ -165,7 +165,11 @@ make installcheck PGHOST=/tmp PGPORT=5432 PGUSER=postgres
 - 輸入：單位字（ns/us/ms/s/min/h/d/w 及全名）、`HH:MM[:SS.f]`、`@`、`ago`、純數字（秒）、ISO 8601 `P..T..`。month/year 會報錯並提示改用 interval；比 1 ns 更細也會報錯。
 - 運算子：比較、B-tree、hash、一元 `-`、`+`、`-`、`* / int`（/ 四捨五入，遠離 0）、`* / numeric`。`smallint` 需要先轉型（不然會有 `operator is not unique`）。
 - 轉型：`interval ↔ nanointerval` 是 ASSIGNMENT 轉型。從 interval 轉入時，有月份或 infinity 會報錯，**1 day 當作 24 小時**。轉成 interval 時會向下取整到 µs。`bigint ↔ nanointerval`（奈秒）只能明確轉型。
-- `nanointerval_ns(x) → numeric`、`nanointerval_from_ns(numeric)`：`nanointerval_from_ns` 接受 numeric（整數與 bigint 會自動轉成 numeric），先四捨五入到整數奈秒（遠離 0），超出範圍會報錯。**沒有 `numeric → nanointerval` 轉型**，`1500::numeric::nanointerval` 會報 `cannot cast type numeric to nanointerval`；請寫 `nanointerval_from_ns(1500)`（→ `00:00:00.000001500`），整數奈秒也可以寫 `1500::bigint::nanointerval`。
+- `nanointerval_ns(x) → numeric`、`nanointerval_from_ns(numeric | bigint | double precision)`：`bigint` 與 `numeric` 版本是精確的（整數參數會選到 bigint 版本；`bigint` 與 `double precision` 版本 0.2.0 起才有，0.1.0 的整數參數走 numeric），先四捨五入到整數奈秒（遠離 0），超出範圍會報錯。**沒有 `numeric → nanointerval` 轉型**，`1500::numeric::nanointerval` 會報 `cannot cast type numeric to nanointerval`；請寫 `nanointerval_from_ns(1500)`（→ `00:00:00.000001500`），整數奈秒也可以寫 `1500::bigint::nanointerval`。
+  - `double precision` 版本（0.2.0）同樣四捨五入（遠離 0）。double 只有 53 位元尾數，超過 2^53 ns（約 104 天）就無法表示每個整數奈秒，例如 `9007199254740993::float8` 會變成 …992；需要精確時請傳 bigint 或 numeric。
+  - NaN 報 `cannot convert NaN to nanointerval`，±Infinity 報 `cannot convert infinity to nanointerval`（numeric 與 double precision 都一樣；0.1.0 對 numeric 報的是 `nanointerval out of range`）。有限但超出範圍的值仍報 `nanointerval out of range`。
+- `abs(nanointerval)`（0.2.0）：nanointerval 的範圍是對稱的（±NI_MAX），所以最小值也能取負，`abs` 與一元 `-` 都不會溢位。
+- `generate_series(start, stop, step nanointerval)`（0.2.0），`start`/`stop` 可為 `nanotimestamptz`、`nanotimestamptz8`、`nanotimestamp`：語意與 PostgreSQL 的 timestamptz 版本相同——包含 `stop`；step 為 0 報 `step size cannot equal zero`；負的 step 往回數；方向不對時回傳空集合；任一參數 NULL 時回傳空集合。內部用 int128 計算，輸出值一定介於 start 與 stop 之間，所以在型別範圍邊緣（例如 nanotimestamptz8 的 2262-04-11）不會繞回也不會報錯。附有 planner support 函式：三個參數都是常數時，列數估計就是精確的序列長度（例如 1 小時／1 分鐘 → 61 列），否則用預設估計。step 是固定奈秒數，不處理月份等日曆單位（那是 `interval` 的事）。
 - 聚合（0.2.0 起）：`min`、`max`、`sum`、`avg`。`sum`／`avg` 以 int128 精確累加奈秒並計數，不會有浮點誤差；結果超出範圍時報錯 `nanointerval out of range`，不會繞回。`avg` 四捨五入到最近的奈秒，剛好一半時遠離 0（與 `nanointerval / bigint` 一致：1 ns 與 2 ns 平均是 2 ns，-1 ns 與 -2 ns 是 -2 ns）。NULL 會被忽略，沒有資料列或全為 NULL 時回傳 NULL。支援平行查詢（combine／serialize）與視窗函式的移動聚合（inverse transition）。
 
 ### 算術（兩種時間型別都有，溢位都會報錯）

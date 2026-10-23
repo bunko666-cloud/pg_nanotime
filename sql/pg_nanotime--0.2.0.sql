@@ -532,3 +532,19 @@ CREATE AGGREGATE avg(nanointerval) (
   MFINALFUNC = nanointerval_avg_final,
   PARALLEL = SAFE);
 COMMENT ON AGGREGATE avg(nanointerval) IS 'exact average, rounded to the nearest ns (half away from zero), like nanointerval / bigint';
+
+-- abs, nanointerval_from_ns(double precision / bigint), generate_series (added in 0.2.0)
+CREATE FUNCTION abs(nanointerval) RETURNS nanointerval AS 'MODULE_PATHNAME', 'nanointerval_abs' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_from_ns(double precision) RETURNS nanointerval AS 'MODULE_PATHNAME', 'nanointerval_from_ns_float8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION nanointerval_from_ns(bigint) RETURNS nanointerval AS 'MODULE_PATHNAME', 'nanointerval_from_ns_int8' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+COMMENT ON FUNCTION nanointerval_from_ns(double precision) IS 'nanoseconds (rounded half away from zero) to nanointerval; inexact beyond 2^53 ns';
+CREATE FUNCTION nanotime_generate_series_support(internal) RETURNS internal AS 'MODULE_PATHNAME' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+CREATE FUNCTION generate_series(nanotimestamptz, nanotimestamptz, nanointerval) RETURNS SETOF nanotimestamptz
+  AS 'MODULE_PATHNAME', 'nanotimestamptz_generate_series' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE
+  SUPPORT nanotime_generate_series_support;
+CREATE FUNCTION generate_series(nanotimestamptz8, nanotimestamptz8, nanointerval) RETURNS SETOF nanotimestamptz8
+  AS 'MODULE_PATHNAME', 'nanotimestamptz8_generate_series' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE
+  SUPPORT nanotime_generate_series_support;
+CREATE FUNCTION generate_series(nanotimestamp, nanotimestamp, nanointerval) RETURNS SETOF nanotimestamp
+  AS 'MODULE_PATHNAME', 'nanotimestamp_generate_series' LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE
+  SUPPORT nanotime_generate_series_support;

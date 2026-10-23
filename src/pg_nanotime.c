@@ -38,6 +38,11 @@
 #include "utils/datetime.h"
 #include "utils/numeric.h"
 #include "utils/timestamp.h"
+#include "nodes/supportnodes.h"
+#include "nodes/nodeFuncs.h"
+#include "optimizer/optimizer.h"
+#include "utils/float.h"
+#include <math.h>
 
 #if PG_VERSION_NUM < 170000
 #error "pg_nanotime requires PostgreSQL 17 or later"
@@ -1422,8 +1427,15 @@ nanointerval_from_ns_numeric(PG_FUNCTION_ARGS)
 
 	if (*p == '-')
 		neg = true, p++;
-	if (strcmp(p, "NaN") == 0 || strcmp(p, "Infinity") == 0)
-		ni_range_error();
+	if (strcmp(p, "NaN") == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("cannot convert NaN to nanointerval")));
+	if (strcmp(p, "Infinity") == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("cannot convert infinity to nanointerval"),
+				 errdetail("nanointerval has no infinite values.")));
 	for (; isdigit((unsigned char) *p); p++)
 	{
 		v = v * 10 + (*p - '0');
@@ -2251,4 +2263,222 @@ nanointerval_avg_final(PG_FUNCTION_ARGS)
 	if (r != 0 && 2 * (r < 0 ? -r : r) >= b)
 		q += (a < 0) ? -1 : 1;
 	PG_RETURN_POINTER(ni_make(q));
+}
+
+/* ------------------------- abs, from_ns(float8) -------------------------- */
+
+/*
+ * The nanointerval range is symmetric (+/- NI_MAX_TOTAL), so every value
+ * can be negated; ni_make() still range-checks for safety.
+ */
+PG_FUNCTION_INFO_V1(nanointerval_abs);
+Datum
+nanointerval_abs(PG_FUNCTION_ARGS)
+{
+	int128		v = nt_total(PG_GETARG_NI(0));
+
+	PG_RETURN_POINTER(ni_make(v < 0 ? -v : v));
+}
+
+/*
+ * double precision nanoseconds -> nanointerval, rounded half away from zero
+ * (same as the numeric version).  A double has a 53-bit mantissa, so values
+ * beyond 2^53 ns (~104 days) are already inexact before they get here.
+ */
+PG_FUNCTION_INFO_V1(nanointerval_from_ns_float8);
+Datum
+nanointerval_from_ns_float8(PG_FUNCTION_ARGS)
+{
+	float8		x = PG_GETARG_FLOAT8(0);
+
+	if (isnan(x))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("cannot convert NaN to nanointerval")));
+	if (isinf(x))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("cannot convert infinity to nanointerval"),
+				 errdetail("nanointerval has no infinite values.")));
+	x = round(x);
+	if (fabs(x) > 1e22)			/* well beyond NI_MAX_TOTAL (~9.4e21) */
+		ni_range_error();
+	PG_RETURN_POINTER(ni_make((int128) x));
+}
+
+/* ------------------------- generate_series ------------------------------- */
+
+typedef enum NsSeriesKind
+{
+	NS_SERIES_TZ,				/* nanotimestamptz */
+	NS_SERIES_TZ8,				/* nanotimestamptz8 */
+	NS_SERIES_NOTZ				/* nanotimestamp */
+} NsSeriesKind;
+
+typedef struct NsSeriesState
+{
+	int128		cur;
+	int128		stop;
+	int128		step;
+	NsSeriesKind kind;
+} NsSeriesState;
+
+static int128
+ns_series_arg(FunctionCallInfo fcinfo, int n, NsSeriesKind kind)
+{
+	if (kind == NS_SERIES_TZ8)
+		return (int128) PG_GETARG_INT64(n);
+	return nt_total(PG_GETARG_NT(n));
+}
+
+static Datum
+ns_series_datum(int128 v, NsSeriesKind kind)
+{
+	switch (kind)
+	{
+		case NS_SERIES_TZ8:
+			return Int64GetDatum((int64) v);
+		case NS_SERIES_NOTZ:
+			return PointerGetDatum(ntl_from_total(v));
+		default:
+			return PointerGetDatum(nt_from_total(v));
+	}
+}
+
+/*
+ * Mirrors PostgreSQL's generate_series(timestamptz, timestamptz, interval):
+ * inclusive of stop, step 0 is an error, a negative step counts down, and an
+ * empty set is returned when start is already past stop.  All arithmetic is
+ * int128 and every emitted value lies between start and stop, so the series
+ * can never overflow or wrap at the edges of the type's range.
+ */
+static Datum
+ns_generate_series(FunctionCallInfo fcinfo, NsSeriesKind kind)
+{
+	FuncCallContext *funcctx;
+	NsSeriesState *st;
+	Datum		result;
+
+	if (SRF_IS_FIRSTCALL())
+	{
+		MemoryContext oldctx;
+		int128		step = nt_total(PG_GETARG_NI(2));
+
+		if (step == 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("step size cannot equal zero")));
+		funcctx = SRF_FIRSTCALL_INIT();
+		oldctx = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+		st = (NsSeriesState *) palloc(sizeof(NsSeriesState));
+		st->cur = ns_series_arg(fcinfo, 0, kind);
+		st->stop = ns_series_arg(fcinfo, 1, kind);
+		st->step = step;
+		st->kind = kind;
+		funcctx->user_fctx = st;
+		MemoryContextSwitchTo(oldctx);
+	}
+	funcctx = SRF_PERCALL_SETUP();
+	st = (NsSeriesState *) funcctx->user_fctx;
+	if ((st->step > 0 && st->cur <= st->stop) ||
+		(st->step < 0 && st->cur >= st->stop))
+	{
+		result = ns_series_datum(st->cur, st->kind);
+		st->cur += st->step;	/* int128: cannot overflow */
+		SRF_RETURN_NEXT(funcctx, result);
+	}
+	SRF_RETURN_DONE(funcctx);
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz_generate_series);
+Datum
+nanotimestamptz_generate_series(PG_FUNCTION_ARGS)
+{
+	return ns_generate_series(fcinfo, NS_SERIES_TZ);
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamptz8_generate_series);
+Datum
+nanotimestamptz8_generate_series(PG_FUNCTION_ARGS)
+{
+	return ns_generate_series(fcinfo, NS_SERIES_TZ8);
+}
+
+PG_FUNCTION_INFO_V1(nanotimestamp_generate_series);
+Datum
+nanotimestamp_generate_series(PG_FUNCTION_ARGS)
+{
+	return ns_generate_series(fcinfo, NS_SERIES_NOTZ);
+}
+
+/*
+ * Planner support: when start, stop and step are non-null constants, the
+ * row estimate is the exact series length (like PostgreSQL's own
+ * generate_series support functions).  The argument type is taken from the
+ * first argument's type length: 8 bytes = nanotimestamptz8 (int64 ns).
+ */
+PG_FUNCTION_INFO_V1(nanotime_generate_series_support);
+Datum
+nanotime_generate_series_support(PG_FUNCTION_ARGS)
+{
+	Node	   *rawreq = (Node *) PG_GETARG_POINTER(0);
+	SupportRequestRows *req;
+	List	   *args;
+	Node	   *a0,
+			   *a1,
+			   *a2;
+	Const	   *c0,
+			   *c1,
+			   *c2;
+	int128		start,
+				stop,
+				step;
+
+	if (!IsA(rawreq, SupportRequestRows))
+		PG_RETURN_POINTER(NULL);
+	req = (SupportRequestRows *) rawreq;
+	if (!is_funcclause(req->node))
+		PG_RETURN_POINTER(NULL);
+	args = ((FuncExpr *) req->node)->args;
+	if (list_length(args) != 3)
+		PG_RETURN_POINTER(NULL);
+	a0 = estimate_expression_value(req->root, linitial(args));
+	a1 = estimate_expression_value(req->root, lsecond(args));
+	a2 = estimate_expression_value(req->root, lthird(args));
+	if (!IsA(a0, Const) || !IsA(a1, Const) || !IsA(a2, Const))
+		PG_RETURN_POINTER(NULL);
+	c0 = (Const *) a0;
+	c1 = (Const *) a1;
+	c2 = (Const *) a2;
+	if (c0->constisnull || c1->constisnull || c2->constisnull)
+	{
+		req->rows = 0;
+		PG_RETURN_POINTER(req);
+	}
+	if (c0->constlen == 8)
+	{
+		start = (int128) DatumGetInt64(c0->constvalue);
+		stop = (int128) DatumGetInt64(c1->constvalue);
+	}
+	else
+	{
+		start = nt_total((NanoTimestamp *) DatumGetPointer(c0->constvalue));
+		stop = nt_total((NanoTimestamp *) DatumGetPointer(c1->constvalue));
+	}
+	step = nt_total((NanoInterval *) DatumGetPointer(c2->constvalue));
+	if (step == 0)
+		PG_RETURN_POINTER(NULL);	/* the function itself will error */
+	if ((step > 0 && start > stop) || (step < 0 && start < stop))
+		req->rows = 0;
+	else
+		req->rows = floor((double) ((stop - start) / step)) + 1;
+	PG_RETURN_POINTER(req);
+}
+
+/* exact bigint overload, so integer arguments never go through float8 */
+PG_FUNCTION_INFO_V1(nanointerval_from_ns_int8);
+Datum
+nanointerval_from_ns_int8(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_POINTER(ni_make((int128) PG_GETARG_INT64(0)));
 }
