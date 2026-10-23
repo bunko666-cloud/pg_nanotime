@@ -58,6 +58,12 @@ SELECT ts, note FROM events;   -- 例如 2026-10-23 09:00:00.123456789+08
 - [CHANGELOG](CHANGELOG.md)、[CONTRIBUTING](CONTRIBUTING.md)
 
 <a id="english"></a>
+## 致謝與 AI 協作說明
+
+本專案由 kanazawa bunko 主導與維護，並在 AI 助理 Grok Bot 的協助下開發。設計討論、程式碼、測試與文件都有 AI 參與；所有變更都經過 PostgreSQL 17 與 18 上的自動化測試驗證，並由維護者審核後才發佈。
+
 ## English
 
 pg_nanotime adds nanosecond-precision timestamps to PostgreSQL 17 and 18. Built-in timestamps stop at microseconds, which is not enough for trading ticks, latency measurement, packet captures or sensor data. It provides `nanotimestamptz` (the default choice; 16 bytes, full range), `nanotimestamptz8` (8 bytes, 1677–2262, TimescaleDB-friendly), `nanotimestamp` (without time zone) and `nanointerval`. It also provides clock functions usable as `DEFAULT` (`clock_ns()`, `now_ns()`), and strictly increasing clocks (`clock_ns_monotonic()`, `clock_ns_global()`). It was inspired by timestamp9 and builds on that idea; out-of-range values raise errors instead of wrapping around. Quick start: `make && sudo make install`, then `CREATE EXTENSION pg_nanotime;`. The docs are in Traditional Chinese; the full English summary is in [docs/TECHNICAL.md](docs/TECHNICAL.md#english).
+
+**Acknowledgements.** Maintained by kanazawa bunko and developed with the help of the AI assistant Grok Bot, which contributed to the design, code, tests and documentation. Every change is verified by the automated test suite on PostgreSQL 17 and 18 and reviewed by the maintainer before release.
