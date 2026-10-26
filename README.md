@@ -47,11 +47,12 @@ SELECT ts, note FROM events;   -- 例如 2026-10-23 09:00:00.123456789+08
 | `nanotimestamptz8` | 資料量非常大（例如每天上億筆 tick），想省空間，或要搭配 TimescaleDB。範圍限於 1677–2262 年。 | 8 bytes |
 | `nanotimestamp` | 不帶時區的「牆上時間」，例如排程表上的 09:00，不管在哪個時區都是 09:00。 | 16 bytes |
 | `nanointerval` | 一段時間長度，例如延遲 `00:00:00.000041250`。兩個時間相減就會得到它。 | 16 bytes |
+| `nanotstzrange` | 一段「從幾點到幾點」的時段，例如儀器或會議室的預約。可以用排他約束讓資料庫擋下重疊的預約。（0.3.0，尚未釋出） | 依內容而定 |
 
 ## 文件
 
 - [使用指南（GUIDE）](docs/GUIDE.md)：依情境一步步說明，包含常見陷阱
-- [實例集（EXAMPLES）](docs/EXAMPLES.md)：交易、撮合、封包、IoT、遷移的實際執行結果
+- [實例集（EXAMPLES）](docs/EXAMPLES.md)：交易、撮合、封包、IoT、遷移、儀器預約的實際執行結果
 - [技術文件（TECHNICAL）](docs/TECHNICAL.md)：完整功能、語意與設計細節
 - [測試報告（TESTING）](docs/TESTING.md)：回歸測試、效能與相容性的實測數字
 - [功能與測試涵蓋表（COVERAGE）](docs/COVERAGE.md)：每個物件由哪些測試涵蓋、已知缺口、改動時要重跑哪些測試
@@ -66,6 +67,6 @@ SELECT ts, note FROM events;   -- 例如 2026-10-23 09:00:00.123456789+08
 
 ## English
 
-pg_nanotime adds nanosecond-precision timestamps to PostgreSQL 17 and 18. Built-in timestamps stop at microseconds, which is not enough for trading ticks, latency measurement, packet captures or sensor data. It provides `nanotimestamptz` (the default choice; 16 bytes, full range), `nanotimestamptz8` (8 bytes, 1677–2262, TimescaleDB-friendly), `nanotimestamp` (without time zone) and `nanointerval`. It also provides clock functions usable as `DEFAULT` (`clock_ns()`, `now_ns()`), and strictly increasing clocks (`clock_ns_monotonic()`, `clock_ns_global()`). It was inspired by timestamp9 and builds on that idea; out-of-range values raise errors instead of wrapping around. Quick start: `make && sudo make install`, then `CREATE EXTENSION pg_nanotime;`. The docs are in Traditional Chinese; the full English summary is in [docs/TECHNICAL.md](docs/TECHNICAL.md#english).
+pg_nanotime adds nanosecond-precision timestamps to PostgreSQL 17 and 18. Built-in timestamps stop at microseconds, which is not enough for trading ticks, latency measurement, packet captures or sensor data. It provides `nanotimestamptz` (the default choice; 16 bytes, full range), `nanotimestamptz8` (8 bytes, 1677–2262, TimescaleDB-friendly), `nanotimestamp` (without time zone) and `nanointerval`, plus (in the unreleased 0.3.0) the range types `nanotstzrange` / `nanotsrange` for non-overlapping bookings with `EXCLUDE USING gist`. It also provides clock functions usable as `DEFAULT` (`clock_ns()`, `now_ns()`), and strictly increasing clocks (`clock_ns_monotonic()`, `clock_ns_global()`). It was inspired by timestamp9 and builds on that idea; out-of-range values raise errors instead of wrapping around. Quick start: `make && sudo make install`, then `CREATE EXTENSION pg_nanotime;`. The docs are in Traditional Chinese; the full English summary is in [docs/TECHNICAL.md](docs/TECHNICAL.md#english).
 
 **Acknowledgements.** Maintained by kanazawa bunko and developed with the help of the AI assistant Grok Bot, which contributed to the design, code, tests and documentation. Every change is verified by the automated test suite on PostgreSQL 17 and 18 and reviewed by the maintainer before release.

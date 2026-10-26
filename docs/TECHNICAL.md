@@ -2,7 +2,7 @@
 
 PostgreSQL 奈秒精度時間戳擴充套件，靈感來自 [timestamp9](https://github.com/optiver/timestamp9)，並在此基礎上進一步發展。授權：PostgreSQL License。
 
-> 狀態：**v0.2.0 已釋出（2026-10-23，Phase 1–4 完成）**。原始碼：[https://github.com/bunko666-cloud/pg_nanotime](https://github.com/bunko666-cloud/pg_nanotime)。[![CI](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml/badge.svg)](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml) [English summary](#english)
+> 狀態：**v0.2.0 已釋出（2026-10-23，Phase 1–4 完成）**；0.3.0（範圍型別）開發中、尚未釋出。原始碼：[https://github.com/bunko666-cloud/pg_nanotime](https://github.com/bunko666-cloud/pg_nanotime)。[![CI](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml/badge.svg)](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml) [English summary](#english)
 >
 > **只支援 PostgreSQL 17 與 18**（已在 17.11、18.6 上建置並通過全部回歸測試）。PG 16 以下會在建置時直接報錯：Makefile 會檢查 `pg_config --version`，原始碼也有 `#error`。程式中沒有任何舊版相容碼。
 >
@@ -66,9 +66,10 @@ PostgreSQL 奈秒精度時間戳擴充套件，靈感來自 [timestamp9](https:/
 | `nanotimestamptz8` | ✓ | ✓ | ✓ | ✗ |
 | `nanotimestamp` | ✓ | ✓ | ✓ | ✗ |
 | `nanointerval` | ✓ | ✓ | ✗ | ✗ |
+| `nanotstzrange`／`nanotsrange`（0.3.0） | ✓（內建 range_ops） | ✓（內建） | ✗ | GiST ✓（內建 range_ops） |
 
 - 不支援 BRIN minmax-multi 與 bloom；int8 的 opclass（如 `int8_minmax_multi_ops`）也不接受 `nanotimestamptz8`。
-- GiST／GIN 沒有運算子類別（安裝 `btree_gist` 也一樣）。需要「時段不可重疊」時，可以自訂 range 型別 `CREATE TYPE nanotstzrange AS RANGE (subtype = nanotimestamptz)`，再用 `EXCLUDE USING gist`；這是 PostgreSQL 的通用機制，不在回歸測試範圍內。
+- 單一時間點的 GiST／GIN 沒有運算子類別（安裝 `btree_gist` 也一樣）。需要「時段不可重疊」時，請用 0.3.0 新增的範圍型別 `nanotstzrange`／`nanotsrange`，它們使用 PostgreSQL 內建的 GiST `range_ops`，可以搭配 `EXCLUDE USING gist`，見[範圍型別](#範圍型別-nanotstzrangenanotsrange030)。
 - 參考（PG 18.6，100 萬列依時間寫入的 `nanotimestamptz8`）：B-tree 21 MiB、hash 32 MiB、BRIN 24 KiB。
 
 ## 型別轉換
@@ -254,6 +255,45 @@ make installcheck PGHOST=/tmp PGPORT=5432 PGUSER=postgres
 
 `ns(nanointerval)`、`nanotime_now_int8()`、`nanotime_part()`、`nanotime_part_notz()`、`nanotime_part8()`。用法範例見 **[docs/TIMESCALEDB.md](TIMESCALEDB.md)**。
 
+## 範圍型別 `nanotstzrange`／`nanotsrange`（0.3.0）
+
+> 0.3.0 尚未釋出（記錄在 CHANGELOG 的 [Unreleased]）。從 0.2.0 升級：`ALTER EXTENSION pg_nanotime UPDATE TO '0.3.0';`
+
+「這段時間有沒有和別人重疊」是很常見的問題：會議室、實驗室儀器、GPU、直播時段都不能重複預約。PostgreSQL 內建的 `tstzrange` 只到微秒，pg_nanotime 0.3.0 用 PostgreSQL 的 `CREATE TYPE ... AS RANGE` 機制，提供奈秒精度的範圍型別：
+
+| 型別 | 子型別 | 自動建立的 multirange | 對應的內建型別 |
+|---|---|---|---|
+| `nanotstzrange` | `nanotimestamptz` | `nanotstzmultirange` | `tstzrange`／`tstzmultirange` |
+| `nanotsrange` | `nanotimestamp` | `nanotsmultirange` | `tsrange`／`tsmultirange` |
+
+```sql
+CREATE EXTENSION btree_gist;   -- 讓 text 等一般欄位也能放進 GiST 排他約束
+CREATE TABLE booking (
+  room   text,
+  during nanotstzrange,
+  EXCLUDE USING gist (room WITH =, during WITH &&)   -- 同一間不能重疊
+);
+```
+
+### 可以用什麼
+
+全部是 PostgreSQL 內建的範圍機制，沒有自訂新的運算子（ROADMAP 的範圍外決定）：
+
+- 建構函式：`nanotstzrange(lower, upper [, '[)'])`、`nanotsrange(...)`、`nanotstzmultirange(range, ...)`、`nanotsmultirange(...)`。`nanotimestamptz8` 與 `timestamptz` 會經由隱含轉型直接傳入 `nanotstzrange(...)`。
+- 運算子：`&&`（重疊）、`@>`／`<@`（包含，右邊可以是範圍或單一時間點）、`-|-`（相鄰）、`<<`／`>>`、`&<`／`&>`、`+`（聯集）、`*`（交集）、`-`（差集），以及 `=`、`<` 等排序比較。
+- 函式：`lower`、`upper`、`isempty`、`lower_inc`、`upper_inc`、`lower_inf`、`upper_inf`、`range_merge`；聚合 `range_agg`（回傳 multirange）、`range_intersect_agg`；`unnest(multirange)`。
+- 長度：`upper(r) - lower(r)` 會得到 `nanointerval`。
+- 索引：GiST（`range_ops`，支援 `&&`、`@>`、`<@`、`-|-` 等）、B-tree（排序、`DISTINCT`）、hash（`GROUP BY`、hash join）；`EXCLUDE USING gist` 排他約束。
+- 文字與二進位 I/O：邊界保留 9 位小數；`COPY ... (FORMAT binary)` 可以往返。
+- 不支援 `infinity` 邊界（子型別本身不支援），請用沒有邊界的寫法，例如 `'[2026-10-26 09:00+08,)'`。
+
+### 設計決定
+
+- **subtype_diff 回傳「秒」（float8）。**`nanotimestamptz_subdiff(a, b)`／`nanotimestamp_subdiff(a, b)` 回傳 `a - b` 的秒數，和內建 `tstzrange_subdiff` 單位相同。GiST 建索引時用它估算「放進哪個節點比較好」（penalty、picksplit），`ANALYZE` 也用它建立範圍長度直方圖；這些都只看相對大小，所以單位本身不影響正確性，選「秒」是為了和內建型別一致。計算時先在 int128 中精確相減，再轉成 float8 一次，所以 1 奈秒的差距會得到 `1e-09`；如果把秒與奈秒分開轉換，`1 s - 0.999999999 s` 這類情況會因相消而失準（開發時實際遇到，已修正並加入回歸測試）。相差很大時（例如數十年），float8 無法表示到奈秒，但這只影響索引的估算，不影響 `&&`、`@>` 等判斷的結果，判斷一律用子型別的精確比較。
+- **連續型範圍，沒有 canonical 函式，和 `tstzrange` 一樣。**雖然奈秒是最小單位，但我們不把 `[a, b]` 自動改寫成 `[a, b+1ns)`，理由是：與內建 `tstzrange`／`tsrange` 的行為一致、保留使用者寫下的邊界，也避免在型別最大值附近 `+1ns` 溢位。代價是：`[t, t+1ns]` 和 `[t, t+2ns)` 包含的時間點相同，但不視為相等；`[t, t+1ns]` 和 `[t+2ns, …)` 中間雖然沒有任何可表示的時間點，`-|-` 仍然回傳 false。**建議一律使用半開區間 `[開始, 結束)`**：前一段的結束剛好是下一段的開始，就會被判定為相鄰、不重疊，這也是預約系統最自然的寫法。
+- **不提供 8 bytes 版的範圍型別。**`nanotimestamptz8` 可以隱含轉型成 `nanotimestamptz`，`nanotstzrange(ts8_a, ts8_b)` 直接可用。另外做一個 8 bytes 的範圍型別會多出一整組型別、multirange 與建構函式，換來的只是每個邊界少 8 bytes，目前不值得；有實際需求再評估。
+- **奈秒邊界實測（回歸測試 `range`）：**`[t, t+1ns)` 與 `[t+1ns, t+2ns)` 相鄰、不重疊；把前者改成 `[t, t+1ns]` 就會剛好共用 1 奈秒（交集是 `[t+1ns, t+1ns]`）；只差 1 奈秒的兩個範圍不相等，排序也分得出先後；排他約束會擋下只重疊 1 奈秒的預約。
+
 <a id="english"></a>
 ## English
 
@@ -274,5 +314,6 @@ pg_nanotime is a PostgreSQL 17/18 extension providing nanosecond timestamps, ins
   - `nanotime_clock_status()` reports clock regressions and drift.
 - **Migration**: `nanotime_migrate_column()` converts timestamp9, bigint ns, timestamptz and timestamp columns in a single `ALTER TABLE`, rebuilding indexes.
 - **TimescaleDB**: `ns()`, `nanotime_now_int8()`, `nanotime_part*()`. See docs/TIMESCALEDB.md.
+- **Range types (0.3.0, unreleased)**: `nanotstzrange` / `nanotsrange` and their multiranges, built with `CREATE TYPE ... AS RANGE`. All built-in range operators, `range_agg`, GiST indexes and `EXCLUDE USING gist` work. They are continuous like `tstzrange` (no canonical function; prefer `[start, end)`), and subtype_diff returns seconds as float8, like `tstzrange_subdiff`.
 
 Install with `make && sudo make install` (PGXS), then `CREATE EXTENSION pg_nanotime;`. Run the tests with `make installcheck`. Detailed docs are in Traditional Chinese; test results, with real measured numbers, are in docs/TESTING.md. License: PostgreSQL.

@@ -1,18 +1,18 @@
 {
    "name": "pg_nanotime",
    "abstract": "Nanosecond-precision timestamp types and clocks for PostgreSQL",
-   "description": "pg_nanotime provides nanotimestamptz (16 bytes, full PostgreSQL range), nanotimestamptz8 (8 bytes, int64 Unix ns, 1677-2262), nanotimestamp (without time zone) and nanointerval, with B-tree/hash/BRIN support, arithmetic, time_bucket_ns, date_trunc, extract_ns, now_ns()/statement_ns()/clock_ns() clocks, per-backend and cross-backend strictly increasing clocks, timestamp9 migration helpers and TimescaleDB helpers.",
-   "version": "0.2.0",
+   "description": "pg_nanotime provides nanotimestamptz (16 bytes, full PostgreSQL range), nanotimestamptz8 (8 bytes, int64 Unix ns, 1677-2262), nanotimestamp (without time zone) and nanointerval, range types nanotstzrange/nanotsrange (with multiranges, GiST and exclusion constraints), with B-tree/hash/BRIN support, arithmetic, time_bucket_ns, date_trunc, extract_ns, now_ns()/statement_ns()/clock_ns() clocks, per-backend and cross-backend strictly increasing clocks, timestamp9 migration helpers and TimescaleDB helpers.",
+   "version": "0.3.0",
    "maintainer": [
       "kanazawa bunko"
    ],
    "license": "postgresql",
    "provides": {
       "pg_nanotime": {
-         "abstract": "Types nanotimestamptz, nanotimestamptz8, nanotimestamp, nanointerval and nanosecond clocks",
-         "file": "sql/pg_nanotime--0.2.0.sql",
+         "abstract": "Types nanotimestamptz, nanotimestamptz8, nanotimestamp, nanointerval, nanotstzrange, nanotsrange and nanosecond clocks",
+         "file": "sql/pg_nanotime--0.3.0.sql",
          "docfile": "docs/TECHNICAL.md",
-         "version": "0.2.0"
+         "version": "0.3.0"
       }
    },
    "prereqs": {
@@ -47,7 +47,8 @@
       "time",
       "timescaledb",
       "timestamp9",
-      "clock"
+      "clock",
+      "range"
    ],
    "release_status": "testing"
 }

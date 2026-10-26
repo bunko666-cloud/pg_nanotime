@@ -1,0 +1,325 @@
+-- range types nanotstzrange / nanotsrange (added in 0.3.0)
+SET timezone = 'Asia/Taipei';
+SET extra_float_digits = 0;
+-- types, subtypes and multirange types created by CREATE TYPE ... AS RANGE
+SELECT r.rngtypid::regtype, r.rngsubtype::regtype, r.rngmultitypid::regtype,
+       r.rngcanonical, r.rngsubdiff
+FROM pg_range r WHERE r.rngsubtype::regtype::text LIKE 'nano%' ORDER BY 1::text;
+   rngtypid    |   rngsubtype    |   rngmultitypid    | rngcanonical |       rngsubdiff        
+---------------+-----------------+--------------------+--------------+-------------------------
+ nanotstzrange | nanotimestamptz | nanotstzmultirange | -            | nanotimestamptz_subdiff
+ nanotsrange   | nanotimestamp   | nanotsmultirange   | -            | nanotimestamp_subdiff
+(2 rows)
+
+-- text I/O keeps all 9 fractional digits; bounds and empty ranges
+SELECT '[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange;
+                              nanotstzrange                              
+-------------------------------------------------------------------------
+ ["2026-10-26 09:00:00.000000001+08","2026-10-26 09:00:00.000000002+08")
+(1 row)
+
+SELECT '(2026-10-26 09:00:00.123456789, 2026-10-26 09:00:01]'::nanotsrange;
+                            nanotsrange                            
+-------------------------------------------------------------------
+ ("2026-10-26 09:00:00.123456789","2026-10-26 09:00:01.000000000"]
+(1 row)
+
+SELECT '[2026-10-26 09:00:00.000000005+08, 2026-10-26 09:00:00.000000005+08)'::nanotstzrange AS empty_range;
+ empty_range 
+-------------
+ empty
+(1 row)
+
+SELECT '(,2026-10-26 09:00:00.000000001+08)'::nanotstzrange AS unbounded_lower;
+            unbounded_lower            
+---------------------------------------
+ (,"2026-10-26 09:00:00.000000001+08")
+(1 row)
+
+SELECT nanotstzrange('2026-10-26 09:00:00.000000002+08', '2026-10-26 09:00:00.000000001+08');  -- error: lower > upper
+ERROR:  range lower bound must be less than or equal to range upper bound
+-- constructors accept the 8-byte type and timestamptz through implicit casts
+SELECT nanotstzrange('2026-10-26 09:00:00.000000001+08'::nanotimestamptz8,
+                     '2026-10-26 09:00:00.000000009+08'::nanotimestamptz8) AS from_8byte;
+                               from_8byte                                
+-------------------------------------------------------------------------
+ ["2026-10-26 09:00:00.000000001+08","2026-10-26 09:00:00.000000009+08")
+(1 row)
+
+SELECT nanotstzrange('2026-10-26 09:00:00+08'::timestamptz, '2026-10-26 10:00:00+08'::timestamptz, '[]') AS from_timestamptz;
+                            from_timestamptz                             
+-------------------------------------------------------------------------
+ ["2026-10-26 09:00:00.000000000+08","2026-10-26 10:00:00.000000000+08"]
+(1 row)
+
+-- lower / upper / isempty / bound flags
+SELECT lower(r), upper(r), isempty(r), lower_inc(r), upper_inc(r), lower_inf(r), upper_inf(r)
+FROM (VALUES ('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange),
+             ('(,2026-10-26 09:00:00+08]'::nanotstzrange),
+             ('empty'::nanotstzrange)) v(r);
+              lower               |              upper               | isempty | lower_inc | upper_inc | lower_inf | upper_inf 
+----------------------------------+----------------------------------+---------+-----------+-----------+-----------+-----------
+ 2026-10-26 09:00:00.000000001+08 | 2026-10-26 09:00:00.000000002+08 | f       | t         | f         | f         | f
+                                  | 2026-10-26 09:00:00.000000000+08 | f       | f         | t         | t         | f
+                                  |                                  | t       | f         | f         | f         | f
+(3 rows)
+
+-- nanosecond boundary: [t, t+1ns) and [t+1ns, ...) touch but do not overlap
+SELECT a && b AS overlaps, a -|- b AS adjacent, a << b AS strictly_left, b >> a AS strictly_right,
+       a &< b AS not_extend_right, b &> a AS not_extend_left
+FROM (SELECT '[2026-10-26 09:00:00.000000000+08, 2026-10-26 09:00:00.000000001+08)'::nanotstzrange AS a,
+             '[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange AS b) s;
+ overlaps | adjacent | strictly_left | strictly_right | not_extend_right | not_extend_left 
+----------+----------+---------------+----------------+------------------+-----------------
+ f        | t        | t             | t              | t                | t
+(1 row)
+
+-- including the upper bound makes them share exactly one nanosecond
+SELECT a && b AS overlaps, a -|- b AS adjacent, a * b AS intersection
+FROM (SELECT '[2026-10-26 09:00:00.000000000+08, 2026-10-26 09:00:00.000000001+08]'::nanotstzrange AS a,
+             '[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange AS b) s;
+ overlaps | adjacent |                              intersection                               
+----------+----------+-------------------------------------------------------------------------
+ t        | f        | ["2026-10-26 09:00:00.000000001+08","2026-10-26 09:00:00.000000001+08"]
+(1 row)
+
+-- ranges differing only at the nanosecond level are different values
+SELECT '[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange
+     = '[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000003+08)'::nanotstzrange AS same,
+       '[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange
+     < '[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000003+08)'::nanotstzrange AS sorts_first;
+ same | sorts_first 
+------+-------------
+ f    | t
+(1 row)
+
+-- containment of ranges and of elements (element given as nanotimestamptz)
+SELECT r @> '2026-10-26 09:00:00.000000001'::nanotimestamptz AS has_1ns,
+       r @> '2026-10-26 09:00:00.000000002'::nanotimestamptz AS has_2ns,
+       '(2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange <@ r AS sub,
+       r @> 'empty'::nanotstzrange AS has_empty
+FROM (SELECT '[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange AS r) s;
+ has_1ns | has_2ns | sub | has_empty 
+---------+---------+-----+-----------
+ t       | f       | t   | t
+(1 row)
+
+-- union, intersection, difference
+SELECT a + b AS union_, a * b AS intersection, a - b AS difference
+FROM (SELECT '[2026-10-26 09:00:00.000000000+08, 2026-10-26 09:00:00.000000005+08)'::nanotstzrange AS a,
+             '[2026-10-26 09:00:00.000000003+08, 2026-10-26 09:00:00.000000009+08)'::nanotstzrange AS b) s;
+                                 union_                                  |                              intersection                               |                               difference                                
+-------------------------------------------------------------------------+-------------------------------------------------------------------------+-------------------------------------------------------------------------
+ ["2026-10-26 09:00:00.000000000+08","2026-10-26 09:00:00.000000009+08") | ["2026-10-26 09:00:00.000000003+08","2026-10-26 09:00:00.000000005+08") | ["2026-10-26 09:00:00.000000000+08","2026-10-26 09:00:00.000000003+08")
+(1 row)
+
+SELECT '[2026-10-26 09:00:00.000000000+08, 2026-10-26 09:00:00.000000001+08)'::nanotstzrange
+     + '[2026-10-26 09:00:00.000000002+08, 2026-10-26 09:00:00.000000003+08)'::nanotstzrange;  -- error: not contiguous
+ERROR:  result of range union would not be contiguous
+SELECT range_merge('[2026-10-26 09:00:00.000000000+08, 2026-10-26 09:00:00.000000001+08)'::nanotstzrange,
+                   '[2026-10-26 09:00:00.000000002+08, 2026-10-26 09:00:00.000000003+08)'::nanotstzrange);
+                               range_merge                               
+-------------------------------------------------------------------------
+ ["2026-10-26 09:00:00.000000000+08","2026-10-26 09:00:00.000000003+08")
+(1 row)
+
+-- the length of a range is upper - lower, a nanointerval (no canonical function: continuous like tstzrange)
+SELECT upper(r) - lower(r) AS length
+FROM (SELECT '[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange AS r) s;
+       length       
+--------------------
+ 00:00:00.000000001
+(1 row)
+
+-- subtype_diff: seconds as float8, same unit as tstzrange_subdiff
+SELECT nanotimestamptz_subdiff('2026-10-26 09:00:00.000000003+08', '2026-10-26 09:00:00+08') AS three_ns,
+       nanotimestamptz_subdiff('2026-10-26 09:00:00+08', '2026-10-26 10:00:00.5+08') AS minus_3600_5_s,
+       nanotimestamp_subdiff('2026-10-26 09:00:01', '2026-10-26 09:00:00.999999999') AS one_ns_notz,
+       tstzrange_subdiff('2026-10-26 10:00:00+08', '2026-10-26 09:00:00+08') AS builtin_tstz;
+ three_ns | minus_3600_5_s | one_ns_notz | builtin_tstz 
+----------+----------------+-------------+--------------
+    3e-09 |        -3600.5 |       1e-09 |         3600
+(1 row)
+
+-- multiranges and range_agg
+SELECT range_agg(r) FROM (VALUES
+  ('[2026-10-26 09:00:00.000000000+08, 2026-10-26 09:00:00.000000003+08)'::nanotstzrange),
+  ('[2026-10-26 09:00:00.000000003+08, 2026-10-26 09:00:00.000000005+08)'),
+  ('[2026-10-26 09:00:00.000000007+08, 2026-10-26 09:00:00.000000009+08)')) v(r);
+                                                                     range_agg                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ {["2026-10-26 09:00:00.000000000+08","2026-10-26 09:00:00.000000005+08"),["2026-10-26 09:00:00.000000007+08","2026-10-26 09:00:00.000000009+08")}
+(1 row)
+
+SELECT range_intersect_agg(r) FROM (VALUES
+  ('[2026-10-26 09:00:00.000000000+08, 2026-10-26 09:00:00.000000005+08)'::nanotstzrange),
+  ('[2026-10-26 09:00:00.000000003+08, 2026-10-26 09:00:00.000000009+08)')) v(r);
+                           range_intersect_agg                           
+-------------------------------------------------------------------------
+ ["2026-10-26 09:00:00.000000003+08","2026-10-26 09:00:00.000000005+08")
+(1 row)
+
+SELECT m, m @> '2026-10-26 09:00:00.000000004+08'::nanotimestamptz AS has_4ns,
+       m @> '2026-10-26 09:00:00.000000006+08'::nanotimestamptz AS has_6ns,
+       m - nanotstzmultirange('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000008+08)'::nanotstzrange) AS minus,
+       range_merge(m) AS merged
+FROM (SELECT nanotstzmultirange('[2026-10-26 09:00:00.000000000+08, 2026-10-26 09:00:00.000000005+08)',
+                                '[2026-10-26 09:00:00.000000007+08, 2026-10-26 09:00:00.000000009+08)') AS m) s;
+                                                                         m                                                                         | has_4ns | has_6ns |                                                                       minus                                                                       |                                 merged                                  
+---------------------------------------------------------------------------------------------------------------------------------------------------+---------+---------+---------------------------------------------------------------------------------------------------------------------------------------------------+-------------------------------------------------------------------------
+ {["2026-10-26 09:00:00.000000000+08","2026-10-26 09:00:00.000000005+08"),["2026-10-26 09:00:00.000000007+08","2026-10-26 09:00:00.000000009+08")} | t       | f       | {["2026-10-26 09:00:00.000000000+08","2026-10-26 09:00:00.000000001+08"),["2026-10-26 09:00:00.000000008+08","2026-10-26 09:00:00.000000009+08")} | ["2026-10-26 09:00:00.000000000+08","2026-10-26 09:00:00.000000009+08")
+(1 row)
+
+SELECT '{[2026-10-26 09:00:00.1, 2026-10-26 09:00:00.2), [2026-10-26 09:00:00.2, 2026-10-26 09:00:00.3)}'::nanotsmultirange;
+                          nanotsmultirange                           
+---------------------------------------------------------------------
+ {["2026-10-26 09:00:00.100000000","2026-10-26 09:00:00.300000000")}
+(1 row)
+
+SELECT pg_typeof(range_agg(r)) FROM (VALUES (nanotsrange('2026-10-26 09:00:00', '2026-10-26 09:00:01'))) v(r);
+    pg_typeof     
+------------------
+ nanotsmultirange
+(1 row)
+
+SELECT u FROM unnest('{[2026-10-26 09:00:00.000000001+08,2026-10-26 09:00:00.000000002+08),[2026-10-26 09:00:00.000000003+08,)}'::nanotstzmultirange) u;
+                                    u                                    
+-------------------------------------------------------------------------
+ ["2026-10-26 09:00:00.000000001+08","2026-10-26 09:00:00.000000002+08")
+ ["2026-10-26 09:00:00.000000003+08",)
+(2 rows)
+
+-- binary I/O round trip
+CREATE TEMP TABLE rng_bin (r nanotstzrange, m nanotstzmultirange, n nanotsrange);
+INSERT INTO rng_bin VALUES ('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)',
+  '{[2026-10-26 09:00:00.000000001+08,2026-10-26 09:00:00.000000002+08),[2026-10-26 09:00:00.000000003+08,)}',
+  '(2026-10-26 09:00:00.123456789, 2026-10-26 09:00:01]');
+SELECT '/tmp/pg_nanotime_regress_range_' || current_setting('port') || '.bin' AS binfile \gset
+COPY rng_bin TO :'binfile' WITH (FORMAT binary);
+CREATE TEMP TABLE rng_bin2 (LIKE rng_bin);
+COPY rng_bin2 FROM :'binfile' WITH (FORMAT binary);
+SELECT a.r = b.r AND a.m = b.m AND a.n = b.n AS copy_binary_round_trip FROM rng_bin a, rng_bin2 b;
+ copy_binary_round_trip 
+------------------------
+ t
+(1 row)
+
+-- booking: no double booking of the same room/instrument, enforced with EXCLUDE USING gist
+CREATE EXTENSION btree_gist;
+CREATE TEMP TABLE booking (
+  room   text,
+  during nanotstzrange,
+  EXCLUDE USING gist (room WITH =, during WITH &&)
+);
+INSERT INTO booking VALUES
+  ('A', '[2026-10-26 09:00:00+08, 2026-10-26 10:00:00+08)'),
+  ('A', '[2026-10-26 10:00:00+08, 2026-10-26 11:00:00+08)'),   -- back to back: allowed
+  ('B', '[2026-10-26 09:30:00+08, 2026-10-26 10:30:00+08)');   -- other room: allowed
+INSERT INTO booking VALUES ('A', '[2026-10-26 09:59:59.999999999+08, 2026-10-26 10:30:00+08)');  -- overlaps by 1 ns: rejected
+ERROR:  conflicting key value violates exclusion constraint "booking_room_during_excl"
+DETAIL:  Key (room, during)=(A, ["2026-10-26 09:59:59.999999999+08","2026-10-26 10:30:00.000000000+08")) conflicts with existing key (room, during)=(A, ["2026-10-26 09:00:00.000000000+08","2026-10-26 10:00:00.000000000+08")).
+INSERT INTO booking VALUES ('A', '[2026-10-26 11:00:00+08, 2026-10-26 11:00:00.000000001+08)'); -- 1 ns slot right after: allowed
+SELECT room, during, upper(during) - lower(during) AS length FROM booking ORDER BY room, during;
+ room |                                 during                                  |       length       
+------+-------------------------------------------------------------------------+--------------------
+ A    | ["2026-10-26 09:00:00.000000000+08","2026-10-26 10:00:00.000000000+08") | 01:00:00.000000000
+ A    | ["2026-10-26 10:00:00.000000000+08","2026-10-26 11:00:00.000000000+08") | 01:00:00.000000000
+ A    | ["2026-10-26 11:00:00.000000000+08","2026-10-26 11:00:00.000000001+08") | 00:00:00.000000001
+ B    | ["2026-10-26 09:30:00.000000000+08","2026-10-26 10:30:00.000000000+08") | 01:00:00.000000000
+(4 rows)
+
+-- GiST index is used for && and @> on a larger table; ANALYZE uses subtype_diff for range statistics
+CREATE TEMP TABLE windows AS
+SELECT i, nanotstzrange(t, t + '500 ns'::nanointerval) AS w
+FROM generate_series('2026-10-26 09:00:00+08'::nanotimestamptz, '2026-10-26 09:00:00.000099999+08', '1 us'::nanointerval)
+     WITH ORDINALITY AS g(t, i);
+CREATE INDEX ON windows USING gist (w);
+ANALYZE windows;
+SET enable_seqscan = off;
+EXPLAIN (COSTS OFF)
+SELECT i FROM windows WHERE w && '[2026-10-26 09:00:00.000010400+08, 2026-10-26 09:00:00.000010600+08)'::nanotstzrange;
+                                                  QUERY PLAN                                                   
+---------------------------------------------------------------------------------------------------------------
+ Index Scan using windows_w_idx on windows
+   Index Cond: (w && '["2026-10-26 09:00:00.000010400+08","2026-10-26 09:00:00.000010600+08")'::nanotstzrange)
+(2 rows)
+
+SELECT i, w FROM windows WHERE w && '[2026-10-26 09:00:00.000010400+08, 2026-10-26 09:00:00.000010600+08)'::nanotstzrange ORDER BY i;
+ i  |                                    w                                    
+----+-------------------------------------------------------------------------
+ 11 | ["2026-10-26 09:00:00.000010000+08","2026-10-26 09:00:00.000010500+08")
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT i FROM windows WHERE w @> '2026-10-26 09:00:00.000020499+08'::nanotimestamptz;
+                                QUERY PLAN                                
+--------------------------------------------------------------------------
+ Index Scan using windows_w_idx on windows
+   Index Cond: (w @> '2026-10-26 09:00:00.000020499+08'::nanotimestamptz)
+(2 rows)
+
+SELECT i FROM windows WHERE w @> '2026-10-26 09:00:00.000020499+08'::nanotimestamptz;  -- inside
+ i  
+----
+ 21
+(1 row)
+
+SELECT i FROM windows WHERE w @> '2026-10-26 09:00:00.000020500+08'::nanotimestamptz;  -- upper bound excluded: none
+ i 
+---
+(0 rows)
+
+RESET enable_seqscan;
+SELECT count(*) AS stats_rows FROM pg_stats
+WHERE tablename = 'windows' AND attname = 'w' AND range_length_histogram IS NOT NULL;
+ stats_rows 
+------------
+          1
+(1 row)
+
+-- B-tree ordering, hash grouping and DISTINCT on ranges
+SELECT r FROM (VALUES
+  ('[2026-10-26 09:00:00.000000002+08,)'::nanotstzrange),
+  ('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000003+08)'),
+  ('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'),
+  ('empty')) v(r) ORDER BY r;
+                                    r                                    
+-------------------------------------------------------------------------
+ empty
+ ["2026-10-26 09:00:00.000000001+08","2026-10-26 09:00:00.000000002+08")
+ ["2026-10-26 09:00:00.000000001+08","2026-10-26 09:00:00.000000003+08")
+ ["2026-10-26 09:00:00.000000002+08",)
+(4 rows)
+
+SET enable_sort = off;
+SELECT count(DISTINCT r) AS distinct_ranges, count(*) AS rows_ FROM (VALUES
+  ('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange),
+  ('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'),
+  ('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000003+08)')) v(r);
+ distinct_ranges | rows_ 
+-----------------+-------
+               2 |     3
+(1 row)
+
+SELECT r, count(*) FROM (VALUES
+  ('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange),
+  ('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'),
+  ('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000003+08)')) v(r) GROUP BY r ORDER BY r;
+                                    r                                    | count 
+-------------------------------------------------------------------------+-------
+ ["2026-10-26 09:00:00.000000001+08","2026-10-26 09:00:00.000000002+08") |     2
+ ["2026-10-26 09:00:00.000000001+08","2026-10-26 09:00:00.000000003+08") |     1
+(2 rows)
+
+RESET enable_sort;
+SELECT hash_range('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange)
+     = hash_range('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange) AS hash_stable,
+       hash_range('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000002+08)'::nanotstzrange)
+     = hash_range('[2026-10-26 09:00:00.000000001+08, 2026-10-26 09:00:00.000000003+08)'::nanotstzrange) AS hash_equal_if_ns_differs;
+ hash_stable | hash_equal_if_ns_differs 
+-------------+--------------------------
+ t           | f
+(1 row)
+
+DROP TABLE booking, windows, rng_bin, rng_bin2;
+DROP EXTENSION btree_gist;

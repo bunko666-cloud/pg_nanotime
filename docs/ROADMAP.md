@@ -1,6 +1,6 @@
 # pg_nanotime 發展規劃（Roadmap）
 
-整理日期：2026-10-26（Asia/Taipei）。目前版本：0.2.0（已發布到 GitHub 與 [PGXN](https://pgxn.org/dist/pg_nanotime/)）。
+整理日期：2026-10-26（Asia/Taipei）。目前版本：0.2.0（已發布到 GitHub 與 [PGXN](https://pgxn.org/dist/pg_nanotime/)）；0.3.0 的範圍型別已完成、尚未釋出。
 
 這份文件記錄「接下來要做什麼、為什麼這樣排、哪些決定不做」，讓之後接手的人（包括未來的自己）不必重新討論一次。每完成一項，就在清單上打勾，並同步更新 [CHANGELOG.md](../CHANGELOG.md) 和 [COVERAGE.md](COVERAGE.md)。
 
@@ -35,13 +35,13 @@
 
 **為什麼：** 「這段時間有沒有重疊」是非常普遍的需求，例如會議室、機台、GPU、直播時段不能重複預約。PostgreSQL 內建的 `tstzrange` 只到微秒，而高頻交易、量測、封包分析需要奈秒級的區間。
 
-- [ ] 用 `CREATE TYPE ... AS RANGE` 定義 `nanotstzrange`（以 `nanotimestamptz` 為子型別），必要時加上 `nanotsrange`（`nanotimestamp`）
-- [ ] 提供 subtype_diff 函式，讓 GiST 索引能有效率地估算
-- [ ] 確認內建的範圍運算子（`&&`、`@>`、`<@`、`-|-` 等）、`range_agg`、multirange 都能正常運作
-- [ ] GiST 索引與排他約束（`EXCLUDE USING gist (資源 WITH =, 時段 WITH &&)`），搭配 `btree_gist`
-- [ ] 回歸測試，並更新 COVERAGE.md
-- [ ] 案例教學一篇，候選情境：「會議室／機台預約不撞期」
-- [ ] 文件：TECHNICAL.md、GUIDE.md、EXAMPLES.md
+- [x] 用 `CREATE TYPE ... AS RANGE` 定義 `nanotstzrange`（以 `nanotimestamptz` 為子型別），並加上 `nanotsrange`（`nanotimestamp`）；8 bytes 版不做（`nanotimestamptz8` 可隱含轉型後直接使用）
+- [x] 提供 subtype_diff 函式，讓 GiST 索引能有效率地估算（回傳秒，與 `tstzrange_subdiff` 相同；沒有 canonical 函式，與 `tstzrange` 一樣是連續型）
+- [x] 確認內建的範圍運算子（`&&`、`@>`、`<@`、`-|-` 等）、`range_agg`、multirange 都能正常運作
+- [x] GiST 索引與排他約束（`EXCLUDE USING gist (資源 WITH =, 時段 WITH &&)`），搭配 `btree_gist`
+- [x] 回歸測試 `range`（PG 17.11／18.6 通過），並更新 COVERAGE.md
+- [x] 案例教學一篇：「共用儀器預約不撞期」（案例 16）
+- [x] 文件：TECHNICAL.md、GUIDE.md、EXAMPLES.md
 
 **範圍外：** 不自訂新的範圍運算子；PostgreSQL 內建的範圍機制已經足夠。
 

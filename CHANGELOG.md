@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+預定版本 0.3.0（尚未釋出）。從 0.2.0 升級：`ALTER EXTENSION pg_nanotime UPDATE TO '0.3.0';`。
+
+### 新增
+- 範圍型別 `nanotstzrange`（子型別 `nanotimestamptz`）與 `nanotsrange`（子型別 `nanotimestamp`），用 PostgreSQL 的 `CREATE TYPE ... AS RANGE` 定義；multirange 型別 `nanotstzmultirange`、`nanotsmultirange` 自動建立。內建的範圍運算子（`&&`、`@>`、`<@`、`-|-`、`<<`、`>>`、`+`、`*`、`-` 等）、`lower`／`upper`／`isempty`、`range_agg`、`range_intersect_agg`、GiST 索引與 `EXCLUDE USING gist`（搭配 `btree_gist`）都可直接使用，不另外自訂運算子。
+- subtype_diff 函式 `nanotimestamptz_subdiff`、`nanotimestamp_subdiff`：回傳秒（float8），與內建 `tstzrange_subdiff` 單位相同；先以 int128 奈秒精確相減再轉換，1 ns 的差距也不會因相消而失準。
+- 範圍型別是連續型（沒有 canonical 函式），和 `tstzrange` 一致；文件建議一律使用半開區間 `[開始, 結束)`。不提供 8 bytes 版範圍型別（`nanotimestamptz8` 可隱含轉型後直接組成 `nanotstzrange`）。
+- 升級腳本 `pg_nanotime--0.2.0--0.3.0.sql`；CI 的升級一致性檢查改為 0.1.0 與 0.2.0 都升級到目前版本，再和全新安裝比對 `\dx+`。
+- 回歸測試 `range`（奈秒邊界的相鄰／重疊、只差 1 ns 的範圍、multirange、COPY binary、排他約束、GiST 計畫、B-tree／hash）；`examples` 新增 ex7「共用儀器預約不撞期」，同步到 EXAMPLES.md §7。
+- 文件：TECHNICAL.md 新增範圍型別一節與索引矩陣列；GUIDE.md 新增 §9「時段不能重疊」（常見陷阱改為 §10，新增「結束點用 `)`」）；COVERAGE.md 加入新物件（共 303 個）；ROADMAP.md 勾選完成項目。
+
 ## [0.2.0] - 2026-10-23
 
 升級：`ALTER EXTENSION pg_nanotime UPDATE TO '0.2.0';`（只支援 PostgreSQL 17 與 18）。

@@ -122,7 +122,54 @@ SELECT create_hypertable('ticks', by_range('ts', ns('1 day')));
 
 詳細步驟與限制見 [TIMESCALEDB.md](TIMESCALEDB.md)。
 
-## 9. 常見陷阱
+## 9. 時段不能重疊：預約與量測視窗（`nanotstzrange`，0.3.0）
+
+> 0.3.0 尚未釋出；從 0.2.0 升級用 `ALTER EXTENSION pg_nanotime UPDATE TO '0.3.0';`。設計細節見 [TECHNICAL.md 的範圍型別](TECHNICAL.md#範圍型別-nanotstzrangenanotsrange030)。
+
+會議室被兩個人同時訂走，是辦公室裡很常見的小災難。與其在程式裡先查再寫（兩個人同時按下去還是會撞），不如讓資料庫直接擋下來：
+
+```sql
+CREATE EXTENSION btree_gist;   -- 讓 room 這種一般欄位也能放進 GiST 排他約束
+CREATE TABLE room_booking (
+  room   text NOT NULL,
+  who    text NOT NULL,
+  during nanotstzrange NOT NULL,
+  EXCLUDE USING gist (room WITH =, during WITH &&)   -- 同一間會議室，時段不能重疊
+);
+INSERT INTO room_booking VALUES
+  ('會議室A', '小陳', '[2026-10-27 09:00+08, 2026-10-27 10:00+08)'),
+  ('會議室A', '小林', '[2026-10-27 10:00+08, 2026-10-27 11:00+08)');   -- 前後相接：可以
+INSERT INTO room_booking VALUES ('會議室A', '小王', '[2026-10-27 09:30+08, 2026-10-27 10:30+08)');
+-- ERROR:  conflicting key value violates exclusion constraint "room_booking_room_during_excl"
+```
+
+常用的查詢：
+
+```sql
+-- 10:15 誰在用？（@> 右邊可以是單一時間點）
+SELECT who FROM room_booking
+WHERE room = '會議室A' AND during @> '2026-10-27 10:15+08'::nanotimestamptz;   -- 小林
+
+-- 一天的忙碌時段（range_agg 合併成 multirange）
+SELECT range_agg(during) FROM room_booking WHERE room = '會議室A';
+-- {["2026-10-27 09:00:00.000000000+08","2026-10-27 11:00:00.000000000+08")}
+
+-- 08:00–12:00 之間的空檔（multirange 差集）
+SELECT nanotstzmultirange('[2026-10-27 08:00+08, 2026-10-27 12:00+08)'::nanotstzrange) - range_agg(during)
+FROM room_booking WHERE room = '會議室A';
+-- {[08:00, 09:00), [11:00, 12:00)}（實際輸出含日期、9 位小數與時區）
+```
+
+會議室用微秒的 `tstzrange` 就夠了。需要奈秒範圍的是時間本來就很密的資料：高頻量測的取樣視窗、封包擷取的時段、撮合引擎的批次區間。這時「前一段在 10:00:00.000000001 結束、下一段從那一刻開始」必須判定為相鄰而不是重疊，只重疊 1 奈秒的時段也要能被擋下，這些都在回歸測試 `range` 裡實測過。
+
+小提醒：
+
+- **一律用半開區間 `[開始, 結束)`。**範圍型別和 `tstzrange` 一樣是「連續型」：`[09:00, 10:00]` 和 `[10:00, 11:00)` 會共用 10:00 這一刻而被判定重疊。
+- 單一時間點不能建 GiST 索引，但範圍型別可以：`CREATE INDEX ON t USING gist (during)`，`&&`、`@>` 查詢會走索引。
+- 長度用 `upper(during) - lower(during)`，得到 `nanointerval`。
+- `nanotimestamptz8` 欄位也能直接組成範圍：`nanotstzrange(start8, end8)`（會隱含轉成 16 bytes）。
+
+## 10. 常見陷阱
 
 1. **沒標型別的 `'1 day'` 是 PostgreSQL 內建 interval。**`ts + '1 day'` 是日曆上的「明天同一時刻」：遇到日光節約時間切換，實際長度會是 23 或 25 小時，而且精度只到微秒。需要固定長度或奈秒精度時，請寫 `'1 day'::nanointerval`。例如在 America/New_York 時區：
 
@@ -135,3 +182,4 @@ SELECT create_hypertable('ticks', by_range('ts', ns('1 day')));
 3. **`clock_ns()` 不保證不重複。**需要唯一、遞增的值時，請用 §3 的 monotonic 或 global 版本。
 4. **`EXTRACT(...)` 和 `AT TIME ZONE` 語法無法擴充**：請改用 `extract_ns('epoch', ts)` 與 `timezone('Asia/Taipei', ts)`。注意 `extract_ns('nanosecond', ts)` 和 PG 的 microsecond 欄位一樣包含整數秒：`...01.000000500` 會得到 `1000000500`；只要秒以下部分時用 `% 1000000000`。
 5. **8 bytes 型別只到 2262 年。**超出範圍時會報錯，不會繞回。需要更大範圍時請改用 `nanotimestamptz`。
+6. **範圍的結束點要用 `)`，不要用 `]`。**`[09:00, 10:00]` 會包含 10:00 這一刻，和下一段 `[10:00, 11:00)` 重疊而被排他約束拒絕。範圍型別沒有 canonical 函式（和 `tstzrange` 一樣），不會自動幫你改寫邊界，見 §9。

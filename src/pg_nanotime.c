@@ -1518,6 +1518,24 @@ nanotimestamptz_mi(PG_FUNCTION_ARGS)
 	PG_RETURN_POINTER(ni_make(nt_total(PG_GETARG_NT(0)) - nt_total(PG_GETARG_NT(1))));
 }
 
+/*
+ * subtype_diff for the range types nanotstzrange / nanotsrange (0.3.0).
+ * Returns a - b in SECONDS as float8, the same unit as PostgreSQL's
+ * tstzrange_subdiff, so GiST penalty and range selectivity behave like
+ * the built-in tstzrange.  The difference is taken exactly in int128
+ * nanoseconds first and converted once, so a 1 ns difference gives 1e-09
+ * (converting seconds and nanoseconds separately would lose it to
+ * cancellation, e.g. 1 s - 0.999999999 s).
+ */
+PG_FUNCTION_INFO_V1(nanotimestamptz_subdiff);
+Datum
+nanotimestamptz_subdiff(PG_FUNCTION_ARGS)
+{
+	int128		diff = nt_total(PG_GETARG_NT(0)) - nt_total(PG_GETARG_NT(1));
+
+	PG_RETURN_FLOAT8((float8) diff / (float8) NS_PER_SEC);
+}
+
 PG_FUNCTION_INFO_V1(nanotimestamptz8_mi);
 Datum
 nanotimestamptz8_mi(PG_FUNCTION_ARGS)

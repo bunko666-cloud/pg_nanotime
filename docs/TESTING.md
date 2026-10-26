@@ -48,6 +48,7 @@ make installcheck WITH_TIMESCALEDB=1 ...
 | `migrate` | 遷移輔助函數：運算式、可疑值計數、dry_run、預設值處理、逐位元比對、索引重建、失敗時不變更 |
 | `monotonic` | `clock_ns_monotonic`：20 萬次呼叫嚴格遞增、模擬時鐘倒退 2 秒、監控計數、權限、`nanotime.clock_source` |
 | `global` | `clock_ns_global`：有 preload 時（`global.out`）測 20 萬次嚴格遞增；沒有 preload 時（`global_1.out`）測錯誤訊息 |
+| `range`（0.3.0） | `nanotstzrange`／`nanotsrange`／multirange：I/O、奈秒邊界的相鄰與重疊、只差 1 ns 的範圍、聯集／交集／差集、`range_agg`、subtype_diff 精度、COPY binary、`EXCLUDE USING gist` 擋下只重疊 1 ns 的預約、GiST 計畫、B-tree／hash |
 | `timescale`（選用） | 分區映射的飽和、`ns()`、`nanotime_now_int8`、16 B 與 8 B hypertable、排除 chunk、drop_chunks、保留策略 |
 
 ### 結果
@@ -59,6 +60,7 @@ make installcheck WITH_TIMESCALEDB=1 ...
 | Phase 2 第一批（9 個） | 3 次 9/9 | 3 次 9/9 |
 | Phase 2 完成（11 個） | 3 次 11/11 | 3 次 11/11 |
 | Phase 3（14 個，含 timescale，有 preload） | 3 次 14/14 | 3 次 14/14 |
+| 0.3.0 範圍型別（18 個，有 preload，不含 timescale；2026-10-26） | 1 次 18/18 | 1 次 18/18 |
 
 `global_1.out`（沒有 preload）只在 PG 18 實際產生並比對過。
 
@@ -69,6 +71,7 @@ make installcheck WITH_TIMESCALEDB=1 ...
 - SQL 函式名 `interval` 是保留字。
 - 整數字面值乘 nanointerval 有歧義，已加上 int4 版本的運算子。
 - 遷移程序原本會丟掉欄位的預設值，現在改為保留，無法轉換時報錯並附提示。
+- 0.3.0：subtype_diff 最初把秒與奈秒分開轉成 float8，`1 s - 0.999999999 s` 得到 `9.99999971718069e-10` 而不是 `1e-09`；改為先在 int128 精確相減再轉換。
 
 ## 3. timestamp9 1.4.0 行為紀錄
 

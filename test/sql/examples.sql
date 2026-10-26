@@ -91,5 +91,19 @@ BEGIN;
 SELECT now_ns() = now_ns() AS same_in_txn, clock_ns_monotonic() < clock_ns_monotonic() AS clock_moves;
 COMMIT;
 
+-- ex7: book a shared instrument without double booking (nanotstzrange, 0.3.0)
+CREATE EXTENSION btree_gist;
+CREATE TABLE bookings (
+  instrument text,
+  during     nanotstzrange,
+  EXCLUDE USING gist (instrument WITH =, during WITH &&)
+);
+INSERT INTO bookings VALUES
+  ('scope-1', '[2026-10-26 09:00:00+00, 2026-10-26 10:00:00+00)'),
+  ('scope-1', '[2026-10-26 10:00:00+00, 2026-10-26 11:00:00+00)');
+INSERT INTO bookings VALUES ('scope-1', '[2026-10-26 09:59:59.999999999+00, 2026-10-26 10:30:00+00)');
+SELECT instrument, during, upper(during) - lower(during) AS length FROM bookings ORDER BY during;
+SELECT range_agg(during) AS busy FROM bookings WHERE instrument = 'scope-1';
+
 RESET search_path;
 DROP SCHEMA ex CASCADE;

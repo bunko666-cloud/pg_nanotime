@@ -192,3 +192,34 @@ SELECT now_ns() = now_ns() AS same_in_txn, clock_ns_monotonic() < clock_ns_monot
 
 COMMIT;
 ```
+
+## 7. 共用儀器預約不撞期（`nanotstzrange`，0.3.0）
+
+同一台儀器的時段不能重疊：`EXCLUDE USING gist (instrument WITH =, during WITH &&)` 讓資料庫自己擋下重複預約（`instrument WITH =` 需要 `btree_gist`）。半開區間 `[開始, 結束)` 讓前後相接的時段可以並存；只重疊 1 奈秒的預約也會被拒絕。`range_agg` 把一天的預約合併成「忙碌時段」。
+
+```
+CREATE EXTENSION btree_gist;
+CREATE TABLE bookings (
+  instrument text,
+  during     nanotstzrange,
+  EXCLUDE USING gist (instrument WITH =, during WITH &&)
+);
+INSERT INTO bookings VALUES
+  ('scope-1', '[2026-10-26 09:00:00+00, 2026-10-26 10:00:00+00)'),
+  ('scope-1', '[2026-10-26 10:00:00+00, 2026-10-26 11:00:00+00)');
+INSERT INTO bookings VALUES ('scope-1', '[2026-10-26 09:59:59.999999999+00, 2026-10-26 10:30:00+00)');
+ERROR:  conflicting key value violates exclusion constraint "bookings_instrument_during_excl"
+DETAIL:  Key (instrument, during)=(scope-1, ["2026-10-26 09:59:59.999999999+00","2026-10-26 10:30:00.000000000+00")) conflicts with existing key (instrument, during)=(scope-1, ["2026-10-26 09:00:00.000000000+00","2026-10-26 10:00:00.000000000+00")).
+SELECT instrument, during, upper(during) - lower(during) AS length FROM bookings ORDER BY during;
+ instrument |                                 during                                  |       length       
+------------+-------------------------------------------------------------------------+--------------------
+ scope-1    | ["2026-10-26 09:00:00.000000000+00","2026-10-26 10:00:00.000000000+00") | 01:00:00.000000000
+ scope-1    | ["2026-10-26 10:00:00.000000000+00","2026-10-26 11:00:00.000000000+00") | 01:00:00.000000000
+(2 rows)
+
+SELECT range_agg(during) AS busy FROM bookings WHERE instrument = 'scope-1';
+                                   busy                                    
+---------------------------------------------------------------------------
+ {["2026-10-26 09:00:00.000000000+00","2026-10-26 11:00:00.000000000+00")}
+(1 row)
+```

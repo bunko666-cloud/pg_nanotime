@@ -86,15 +86,19 @@ jobs:
       - name: make installcheck (preloaded)
         run: make installcheck PG_CONFIG="$PG_CONFIG"
 
-      - name: Upgrade 0.1.0 -> current matches a fresh install
+      - name: Upgrade 0.1.0 / 0.2.0 -> current matches a fresh install
         run: |
-          "$PGBIN/psql" -X -v ON_ERROR_STOP=1 -c "CREATE DATABASE up_old" -c "CREATE DATABASE up_new"
-          "$PGBIN/psql" -X -v ON_ERROR_STOP=1 -d up_old -c "CREATE EXTENSION pg_nanotime VERSION '0.1.0'" -c "ALTER EXTENSION pg_nanotime UPDATE"
+          "$PGBIN/psql" -X -v ON_ERROR_STOP=1 -c "CREATE DATABASE up_new"
           "$PGBIN/psql" -X -v ON_ERROR_STOP=1 -d up_new -c "CREATE EXTENSION pg_nanotime"
-          "$PGBIN/psql" -X -d up_old -c '\dx+ pg_nanotime' > "$RUNNER_TEMP/up_old.txt"
           "$PGBIN/psql" -X -d up_new -c '\dx+ pg_nanotime' > "$RUNNER_TEMP/up_new.txt"
-          diff "$RUNNER_TEMP/up_old.txt" "$RUNNER_TEMP/up_new.txt"
-          "$PGBIN/psql" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE up_old" -c "DROP DATABASE up_new"
+          for from in 0.1.0 0.2.0; do
+            "$PGBIN/psql" -X -v ON_ERROR_STOP=1 -c "CREATE DATABASE up_old"
+            "$PGBIN/psql" -X -v ON_ERROR_STOP=1 -d up_old -c "CREATE EXTENSION pg_nanotime VERSION '$from'" -c "ALTER EXTENSION pg_nanotime UPDATE"
+            "$PGBIN/psql" -X -d up_old -c '\dx+ pg_nanotime' > "$RUNNER_TEMP/up_old.txt"
+            echo "upgrade from $from:"; diff "$RUNNER_TEMP/up_old.txt" "$RUNNER_TEMP/up_new.txt"
+            "$PGBIN/psql" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE up_old"
+          done
+          "$PGBIN/psql" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE up_new"
 
       - name: global test without shared_preload_libraries (expects global_1.out)
         run: |
