@@ -12,7 +12,11 @@
 - 範圍型別是連續型（沒有 canonical 函式），和 `tstzrange` 一致；文件建議一律使用半開區間 `[開始, 結束)`。不提供 8 bytes 版範圍型別（`nanotimestamptz8` 可隱含轉型後直接組成 `nanotstzrange`）。
 - 升級腳本 `pg_nanotime--0.2.0--0.3.0.sql`；CI 的升級一致性檢查改為 0.1.0 與 0.2.0 都升級到目前版本，再和全新安裝比對 `\dx+`。
 - 回歸測試 `range`（奈秒邊界的相鄰／重疊、只差 1 ns 的範圍、multirange、COPY binary、排他約束、GiST 計畫、B-tree／hash）；`examples` 新增 ex7「共用儀器預約不撞期」，同步到 EXAMPLES.md §7。
-- 文件：TECHNICAL.md 新增範圍型別一節與索引矩陣列；GUIDE.md 新增 §9「時段不能重疊」（常見陷阱改為 §10，新增「結束點用 `)`」）；COVERAGE.md 加入新物件（共 303 個）；ROADMAP.md 勾選完成項目。
+- TimescaleDB 一鍵設定 `nanotime_timescale_setup(表, 欄位, chunk, migrate_data)`：依欄位型別選分區函數（`nanotime_part`／`nanotime_part_notz`／`nanotime_part8`），chunk 以奈秒 bigint 傳入 `by_range()`，設定 `set_integer_now_func`（保留策略可用），不建分區運算式上的預設索引，改在沒有等效索引時建立 `(欄位 DESC)`；回傳一行摘要。
+- `nanotime_drop_chunks(表, older_than, newer_than)`：直接給 `nanotimestamptz`，自動換成 hypertable 時間維度的值（不用再寫 `::bigint`）。
+- 兩個 TimescaleDB 輔助函式都用動態 SQL 呼叫 TimescaleDB，擴充本身不依賴它；沒有安裝時報錯並附提示。需要 TimescaleDB 2.13 以上的 `by_range()` 介面（實測 2.31.0）。
+- 回歸測試 `timescale_missing`（一般測試，沒有 TimescaleDB 時的錯誤）；選用測試 `timescale` 加入一鍵設定、chunk 與索引、`ORDER BY t DESC LIMIT` 使用 `(t DESC)` 索引、保留策略、`nanotime_drop_chunks` 與錯誤情況。
+- 文件：TECHNICAL.md 新增範圍型別一節與索引矩陣列；GUIDE.md 新增 §9「時段不能重疊」（常見陷阱改為 §10，新增「結束點用 `)`」）；COVERAGE.md 加入新物件（共 305 個）；ROADMAP.md 勾選完成項目；TIMESCALEDB.md 新增「一鍵設定」一節，GUIDE.md §8 改以一鍵設定為主；TECHNICAL.md 記錄原生 8 B 維度的保留策略會在執行時失敗。
 
 ## [0.2.0] - 2026-10-23
 

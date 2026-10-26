@@ -53,7 +53,7 @@ PostgreSQL 奈秒精度時間戳擴充套件，靈感來自 [timestamp9](https:/
 
 - 可以直接作為 hypertable 的時間維度，不需要分區函數：`create_hypertable('t', by_range('ts', 86400000000000))`。chunk 排除、壓縮、`drop_chunks(older_than => '...'::nanotimestamptz8)` 都正常，預設索引為 `(ts DESC)`。
 - 若建立時指定了 `partition_func => 'nanotime_part8'`（要用 `set_integer_now_func` 或保留策略時需要），`drop_chunks` 的 `older_than` 必須是 bigint：寫 `'...'::nanotimestamptz8::bigint`；直接給 `nanotimestamptz8` 會報 `invalid time argument type "nanotimestamptz8"`。此時 TimescaleDB 的預設索引建在 `nanotime_part8(ts)` 運算式上，直接用 `ts` 查詢用不到它（chunk 排除仍有效，但 chunk 內是 seq scan），請另外建立 `CREATE INDEX ON t (ts DESC);`。
-- **不能**使用 `set_integer_now_func` 與連續聚合：TimescaleDB 不把它當成整數維度。`time_bucket` 也沒有這個型別的版本，請用 `time_bucket(bigint, ts::bigint)::nanotimestamptz8` 查詢。需要連續聚合時，請把時間欄位存成 `bigint`。
+- 原生維度**不能**使用 `set_integer_now_func` 與連續聚合：TimescaleDB 不把它當成整數維度。`add_retention_policy` 雖然建得起來，執行時卻報 `interval field value out of range`（2.31.0 實測），要用保留策略請設 `partition_func => 'nanotime_part8'`，或直接用 0.3.0 的 `nanotime_timescale_setup()`。`time_bucket` 也沒有這個型別的版本，請用 `time_bucket(bigint, ts::bigint)::nanotimestamptz8` 查詢。需要連續聚合時，請把時間欄位存成 `bigint`。
 
 ## 運算子與索引
 
@@ -255,6 +255,21 @@ make installcheck PGHOST=/tmp PGPORT=5432 PGUSER=postgres
 
 `ns(nanointerval)`、`nanotime_now_int8()`、`nanotime_part()`、`nanotime_part_notz()`、`nanotime_part8()`。用法範例見 **[docs/TIMESCALEDB.md](TIMESCALEDB.md)**。
 
+0.3.0（尚未釋出）新增兩個一鍵輔助函式：
+
+| 函式 | 做什麼 |
+|---|---|
+| `nanotime_timescale_setup(tbl regclass, col name, chunk nanointerval DEFAULT '1 day', migrate_data bool DEFAULT false) → text` | 依欄位型別選 `nanotime_part`／`nanotime_part_notz`／`nanotime_part8`，以 `by_range(col, chunk::bigint, partition_func)` 和 `create_default_indexes => false` 呼叫 `create_hypertable`，設定 `set_integer_now_func(tbl, 'nanotime_now_int8')`，最後在沒有等效索引時建立 `(col DESC)`；回傳一行摘要 |
+| `nanotime_drop_chunks(tbl regclass, older_than nanotimestamptz DEFAULT NULL, newer_than nanotimestamptz DEFAULT NULL) → SETOF text` | 依 hypertable 時間維度的分區函數把邊界換成 bigint（與分區函數相同的飽和映射），原生 8 B 維度則轉成 `nanotimestamptz8`，再呼叫 `drop_chunks` |
+
+設計決定：
+
+- **不依賴 TimescaleDB**：兩個函式都是 PL/pgSQL，所有 TimescaleDB 物件都用動態 SQL 呼叫，並以 `pg_extension` 查出 timescaledb 與 pg_nanotime 所在的 schema 再加上限定名稱（pg_nanotime 可重新定位，`search_path` 不含它的 schema 也能用）。沒有安裝 TimescaleDB 時報 `TimescaleDB is not installed in this database`（SQLSTATE 55000）並附 HINT。
+- **只支援 `by_range()` 介面**（TimescaleDB 2.13 起）。支援 PG 17／18 的 TimescaleDB 都有這個介面，所以不寫舊介面的分支；沒有時報 `feature_not_supported`。
+- **8 B 型別也用分區函數** `nanotime_part8`：原生維度不能設 integer now，保留策略會在執行時失敗；統一用分區函數讓三種型別行為一致。
+- **等效索引**：任何有效、非部分、第一個欄位是該時間欄位的 B-tree 索引（ASC 或 DESC）都能服務 `WHERE col ...` 與 `ORDER BY col DESC LIMIT n`，有就沿用。
+- **`nanotime_drop_chunks` 的範圍**：只接受 `nanotimestamptz`（不提供 `nanotimestamp`／`nanointerval` 多載，避免不帶型別的字面值出現多載歧義）；`older_than` 換算後是 int64 最小值時回傳空集合。讀取時間維度用到 TimescaleDB 內部目錄 `_timescaledb_catalog.dimension`（公開的 `timescaledb_information.dimensions` 沒有分區函數欄位）。
+
 ## 範圍型別 `nanotstzrange`／`nanotsrange`（0.3.0）
 
 > 0.3.0 尚未釋出（記錄在 CHANGELOG 的 [Unreleased]）。從 0.2.0 升級：`ALTER EXTENSION pg_nanotime UPDATE TO '0.3.0';`
@@ -313,7 +328,7 @@ pg_nanotime is a PostgreSQL 17/18 extension providing nanosecond timestamps, ins
   - The clock is selected with `nanotime.clock_source = realtime | tai`.
   - `nanotime_clock_status()` reports clock regressions and drift.
 - **Migration**: `nanotime_migrate_column()` converts timestamp9, bigint ns, timestamptz and timestamp columns in a single `ALTER TABLE`, rebuilding indexes.
-- **TimescaleDB**: `ns()`, `nanotime_now_int8()`, `nanotime_part*()`. See docs/TIMESCALEDB.md.
+- **TimescaleDB**: `ns()`, `nanotime_now_int8()`, `nanotime_part*()`; 0.3.0 (unreleased) adds `nanotime_timescale_setup()` (hypertable + integer-now + `(col DESC)` index in one call) and `nanotime_drop_chunks()` (nanotimestamptz bounds). pg_nanotime does not depend on TimescaleDB; both call it through dynamic SQL. See docs/TIMESCALEDB.md.
 - **Range types (0.3.0, unreleased)**: `nanotstzrange` / `nanotsrange` and their multiranges, built with `CREATE TYPE ... AS RANGE`. All built-in range operators, `range_agg`, GiST indexes and `EXCLUDE USING gist` work. They are continuous like `tstzrange` (no canonical function; prefer `[start, end)`), and subtype_diff returns seconds as float8, like `tstzrange_subdiff`.
 
 Install with `make && sudo make install` (PGXS), then `CREATE EXTENSION pg_nanotime;`. Run the tests with `make installcheck`. Detailed docs are in Traditional Chinese; test results, with real measured numbers, are in docs/TESTING.md. License: PostgreSQL.

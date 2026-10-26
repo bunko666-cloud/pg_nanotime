@@ -2,7 +2,7 @@ EXTENSION  = pg_nanotime
 MODULE_big = pg_nanotime
 OBJS       = src/pg_nanotime.o
 DATA       = sql/pg_nanotime--0.1.0.sql sql/pg_nanotime--0.2.0.sql sql/pg_nanotime--0.3.0.sql sql/pg_nanotime--0.1.0--0.2.0.sql sql/pg_nanotime--0.2.0--0.3.0.sql
-REGRESS    = basic io casts clocks index compact interval arith bucket notz migrate monotonic global agg series coverage range examples
+REGRESS    = basic io casts clocks index compact interval arith bucket notz migrate monotonic global agg series coverage range timescale_missing examples
 ifdef WITH_TIMESCALEDB
 REGRESS += timescale
 endif

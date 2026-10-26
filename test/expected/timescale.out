@@ -171,3 +171,240 @@ SELECT min(t), count(*) FROM h8;
  2024-01-03 00:00:00.000000000+00 |     8
 (1 row)
 
+-- 0.3.0: one-step setup nanotime_timescale_setup / nanotime_drop_chunks
+CREATE FUNCTION pg_temp.plan_check(q text, idx text,
+    OUT ordered bool, OUT uses_index bool, OUT sorts_or_seqscans bool) LANGUAGE plpgsql AS $$
+DECLARE line text;
+BEGIN
+  ordered := false; uses_index := false; sorts_or_seqscans := false;
+  FOR line IN EXECUTE 'EXPLAIN (analyze, costs off, timing off, summary off, buffers off) ' || q LOOP
+    ordered := ordered OR line ~ 'Order: t DESC';
+    uses_index := uses_index OR line ~ ('Index Scan using _hyper_\d+_\d+_chunk_' || idx);
+    sorts_or_seqscans := sorts_or_seqscans OR line ~ '(Sort|Seq Scan)';
+  END LOOP;
+END $$;
+-- 16 B with time zone
+CREATE TABLE s16(t nanotimestamptz NOT NULL, v int);
+SELECT nanotime_timescale_setup('s16', 't', '1 day');
+                                                                        nanotime_timescale_setup                                                                        
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ hypertable s16: column t (nanotimestamptz), partition_func nanotime_part, chunk 1 day (86400000000000 ns), integer_now_func nanotime_now_int8, index s16_t_idx created
+(1 row)
+
+SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 's16';
+                         indexdef                          
+-----------------------------------------------------------
+ CREATE INDEX s16_t_idx ON public.s16 USING btree (t DESC)
+(1 row)
+
+SELECT h.table_name, d.column_name, d.partitioning_func, d.interval_length, d.integer_now_func
+  FROM _timescaledb_catalog.dimension d JOIN _timescaledb_catalog.hypertable h ON h.id = d.hypertable_id
+ WHERE h.table_name = 's16';
+ table_name | column_name | partitioning_func | interval_length | integer_now_func  
+------------+-------------+-------------------+-----------------+-------------------
+ s16        | t           | nanotime_part     |  86400000000000 | nanotime_now_int8
+(1 row)
+
+INSERT INTO s16 SELECT '2024-01-01 00:00:00.000000001+00'::nanotimestamptz + g * '1 min'::nanointerval, g
+  FROM generate_series(0, 4319) g;
+SELECT count(*) AS chunks FROM show_chunks('s16');
+ chunks 
+--------
+      3
+(1 row)
+
+SELECT count(*) AS chunk_t_desc_indexes FROM show_chunks('s16') c
+  JOIN pg_index i ON i.indrelid = c JOIN pg_attribute a ON a.attrelid = c AND a.attnum = i.indkey[0]
+ WHERE a.attname = 't' AND i.indoption[0] & 1 = 1;
+ chunk_t_desc_indexes 
+----------------------
+                    3
+(1 row)
+
+ANALYZE s16;
+SELECT * FROM pg_temp.plan_check('SELECT * FROM s16 ORDER BY t DESC LIMIT 3', 's16_t_idx');
+ ordered | uses_index | sorts_or_seqscans 
+---------+------------+-------------------
+ t       | t          | f
+(1 row)
+
+SELECT * FROM s16 ORDER BY t DESC LIMIT 3;
+                t                 |  v   
+----------------------------------+------
+ 2024-01-03 23:59:00.000000001+00 | 4319
+ 2024-01-03 23:58:00.000000001+00 | 4318
+ 2024-01-03 23:57:00.000000001+00 | 4317
+(3 rows)
+
+SELECT * FROM pg_temp.plan_check('SELECT * FROM s16 WHERE t >= ''2024-01-02 10:00+00'' AND t < ''2024-01-02 10:05+00''', 's16_t_idx');
+ ordered | uses_index | sorts_or_seqscans 
+---------+------------+-------------------
+ f       | t          | f
+(1 row)
+
+SELECT count(*) AS dropped FROM nanotime_drop_chunks('s16', older_than => '2024-01-02 00:00:00+00');
+ dropped 
+---------
+       1
+(1 row)
+
+SELECT min(t), count(*) FROM s16;
+               min                | count 
+----------------------------------+-------
+ 2024-01-02 00:00:00.000000001+00 |  2880
+(1 row)
+
+SELECT count(*) AS dropped FROM nanotime_drop_chunks('s16', newer_than => '2024-01-03 00:00:00+00');
+ dropped 
+---------
+       1
+(1 row)
+
+SELECT min(t), max(t), count(*) FROM s16;
+               min                |               max                | count 
+----------------------------------+----------------------------------+-------
+ 2024-01-02 00:00:00.000000001+00 | 2024-01-02 23:59:00.000000001+00 |  1440
+(1 row)
+
+-- integer now is set, so a retention policy runs
+SELECT add_retention_policy('s16', drop_after => ns('1 day')) AS job \gset
+CALL run_job(:job);
+SELECT count(*) AS after_retention FROM s16;
+ after_retention 
+-----------------
+               0
+(1 row)
+
+SELECT remove_retention_policy('s16');
+ remove_retention_policy 
+-------------------------
+ 
+(1 row)
+
+-- without time zone
+CREATE TABLE snz(t nanotimestamp NOT NULL, v int);
+SELECT nanotime_timescale_setup('snz', 't', '1 hour');
+                                                                               nanotime_timescale_setup                                                                                
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ hypertable snz: column t (nanotimestamp), partition_func nanotime_part_notz, chunk 01:00:00.000000000 (3600000000000 ns), integer_now_func nanotime_now_int8, index snz_t_idx created
+(1 row)
+
+INSERT INTO snz SELECT '2024-01-01'::nanotimestamp + g * '30 min'::nanointerval, g FROM generate_series(0, 15) g;
+SELECT count(*) AS chunks FROM show_chunks('snz');
+ chunks 
+--------
+      8
+(1 row)
+
+SELECT count(*) AS dropped FROM nanotime_drop_chunks('snz', older_than => '2024-01-01 04:00:00+00');
+ dropped 
+---------
+       4
+(1 row)
+
+SELECT min(t), count(*) FROM snz;
+              min              | count 
+-------------------------------+-------
+ 2024-01-01 04:00:00.000000000 |     8
+(1 row)
+
+-- 8 B with an existing index on the column: kept, not duplicated
+CREATE TABLE s8(t nanotimestamptz8 NOT NULL, v int);
+CREATE INDEX s8_t ON s8 (t);
+SELECT nanotime_timescale_setup('s8', 't', '6 hours');
+                                                                                   nanotime_timescale_setup                                                                                    
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ hypertable s8: column t (nanotimestamptz8), partition_func nanotime_part8, chunk 06:00:00.000000000 (21600000000000 ns), integer_now_func nanotime_now_int8, index s8_t already exists (kept)
+(1 row)
+
+SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 's8';
+                    indexdef                    
+------------------------------------------------
+ CREATE INDEX s8_t ON public.s8 USING btree (t)
+(1 row)
+
+INSERT INTO s8 SELECT '2024-01-01+00'::nanotimestamptz8 + g * '6 hours'::nanointerval, g FROM generate_series(0, 15) g;
+SELECT count(*) AS chunks FROM show_chunks('s8');
+ chunks 
+--------
+     16
+(1 row)
+
+SELECT count(*) AS dropped FROM nanotime_drop_chunks('s8', older_than => '1000-01-01 00:00:00+00');  -- nothing older: no error
+ dropped 
+---------
+       0
+(1 row)
+
+SELECT count(*) AS dropped FROM nanotime_drop_chunks('s8', older_than => '2024-01-02 00:00:00+00');
+ dropped 
+---------
+       4
+(1 row)
+
+SELECT min(t), count(*) FROM s8;
+               min                | count 
+----------------------------------+-------
+ 2024-01-02 00:00:00.000000000+00 |    12
+(1 row)
+
+-- 8 B partitioned natively (no partition function): the wrapper passes nanotimestamptz8
+CREATE TABLE n8(t nanotimestamptz8 NOT NULL, v int);
+SELECT create_hypertable('n8', by_range('t', ns('1 day')));
+ create_hypertable 
+-------------------
+ (7,t)
+(1 row)
+
+INSERT INTO n8 SELECT '2024-01-01+00'::nanotimestamptz8 + g * '6 hours'::nanointerval, g FROM generate_series(0, 15) g;
+SELECT count(*) AS dropped FROM nanotime_drop_chunks('n8', older_than => '2024-01-02 00:00:00+00');
+ dropped 
+---------
+       1
+(1 row)
+
+SELECT min(t), count(*) FROM n8;
+               min                | count 
+----------------------------------+-------
+ 2024-01-02 00:00:00.000000000+00 |    12
+(1 row)
+
+-- errors
+SELECT nanotime_timescale_setup('s16', 't');
+ERROR:  table "s16" is already a hypertable
+CONTEXT:  SQL statement "SELECT public.create_hypertable($1, public.by_range($2, $3, $4), create_default_indexes => false, migrate_data => $5)"
+PL/pgSQL function nanotime_timescale_setup(regclass,name,nanointerval,boolean) line 44 at EXECUTE
+CREATE TABLE sbad(t timestamptz NOT NULL, u nanotimestamptz NOT NULL);
+SELECT nanotime_timescale_setup('sbad', 't');
+ERROR:  column "t" of relation sbad is timestamp with time zone, not nanotimestamptz, nanotimestamp or nanotimestamptz8
+CONTEXT:  PL/pgSQL function nanotime_timescale_setup(regclass,name,nanointerval,boolean) line 36 at RAISE
+SELECT nanotime_timescale_setup('sbad', 'nope');
+ERROR:  column "nope" of relation sbad does not exist
+CONTEXT:  PL/pgSQL function nanotime_timescale_setup(regclass,name,nanointerval,boolean) line 28 at RAISE
+SELECT nanotime_timescale_setup('sbad', 'u', '0');
+ERROR:  chunk interval must be positive
+CONTEXT:  PL/pgSQL function nanotime_timescale_setup(regclass,name,nanointerval,boolean) line 40 at RAISE
+SELECT * FROM nanotime_drop_chunks('sbad', older_than => '2024-01-01 00:00:00+00');
+ERROR:  sbad is not a hypertable
+CONTEXT:  PL/pgSQL function nanotime_drop_chunks(regclass,nanotimestamptz,nanotimestamptz) line 26 at RAISE
+INSERT INTO sbad VALUES ('2024-01-01+00', '2024-01-01 00:00:00.5+00');
+SELECT nanotime_timescale_setup('sbad', 'u');
+ERROR:  table "sbad" is not empty
+HINT:  You can migrate data by specifying 'migrate_data => true' when calling this function.
+CONTEXT:  SQL statement "SELECT public.create_hypertable($1, public.by_range($2, $3, $4), create_default_indexes => false, migrate_data => $5)"
+PL/pgSQL function nanotime_timescale_setup(regclass,name,nanointerval,boolean) line 44 at EXECUTE
+SET client_min_messages = warning;
+SELECT nanotime_timescale_setup('sbad', 'u', migrate_data => true);
+                                                                         nanotime_timescale_setup                                                                         
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ hypertable sbad: column u (nanotimestamptz), partition_func nanotime_part, chunk 1 day (86400000000000 ns), integer_now_func nanotime_now_int8, index sbad_u_idx created
+(1 row)
+
+RESET client_min_messages;
+SELECT count(*) AS chunks FROM show_chunks('sbad');
+ chunks 
+--------
+      1
+(1 row)
+
+DROP TABLE s16, snz, s8, n8, sbad;

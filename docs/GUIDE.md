@@ -108,6 +108,20 @@ CALL nanotime_migrate_column('events', 't', 'nanotimestamptz8'); -- 或指定目
 
 ## 8. TimescaleDB 基本用法
 
+0.3.0（尚未釋出）起，一個函式就能設定好：
+
+```sql
+CREATE TABLE ticks (ts nanotimestamptz8 NOT NULL, price numeric);
+SELECT nanotime_timescale_setup('ticks', 'ts', '1 day');
+-- 建立 hypertable（分區函數 nanotime_part8）、設定 integer now、補上 (ts DESC) 索引
+SELECT add_retention_policy('ticks', drop_after => ns('30 days'));   -- 保留策略可以直接用
+SELECT * FROM nanotime_drop_chunks('ticks', older_than => '2026-10-01+08');  -- 不用自己加 ::bigint
+```
+
+`nanotimestamptz`、`nanotimestamp` 也是同一個寫法，函式會選對分區函數。沒有安裝 TimescaleDB 時會直接報錯並提示安裝方式。
+
+0.2.0 或想手動設定時：
+
 ```sql
 CREATE TABLE ticks (ts nanotimestamptz8 NOT NULL, price numeric);
 SELECT create_hypertable('ticks', by_range('ts', ns('1 day')));

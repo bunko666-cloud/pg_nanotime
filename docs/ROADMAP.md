@@ -1,6 +1,6 @@
 # pg_nanotime 發展規劃（Roadmap）
 
-整理日期：2026-10-26（Asia/Taipei）。目前版本：0.2.0（已發布到 GitHub 與 [PGXN](https://pgxn.org/dist/pg_nanotime/)）；0.3.0 的範圍型別已完成、尚未釋出。
+整理日期：2026-10-26（Asia/Taipei）。目前版本：0.2.0（已發布到 GitHub 與 [PGXN](https://pgxn.org/dist/pg_nanotime/)）；0.3.0 的範圍型別與 TimescaleDB 一鍵設定已完成、尚未釋出。
 
 這份文件記錄「接下來要做什麼、為什麼這樣排、哪些決定不做」，讓之後接手的人（包括未來的自己）不必重新討論一次。每完成一項，就在清單上打勾，並同步更新 [CHANGELOG.md](../CHANGELOG.md) 和 [COVERAGE.md](COVERAGE.md)。
 
@@ -45,16 +45,16 @@
 
 **範圍外：** 不自訂新的範圍運算子；PostgreSQL 內建的範圍機制已經足夠。
 
-### 優先 2：TimescaleDB 一鍵設定輔助函式（目標 0.3.0 或 0.3.x）
+### 優先 2：TimescaleDB 一鍵設定輔助函式（目標 0.3.0，已完成）
 
 **為什麼：** 目前用 TimescaleDB 有兩個容易踩到的坑，寫在文件裡但仍然常被忽略：
 1. 使用 `partition_func` 時，預設索引建在分區運算式上，查詢時間欄位需要自己再建 `(ts DESC)` 索引。
 2. `drop_chunks` 的時間參數需要加 `::bigint`。
 
-- [ ] 設計一個輔助函式（暫名 `nanotime_timescale_setup(table regclass, col name, chunk nanointerval)`），一次完成建立 hypertable 與補上 `(ts DESC)` 索引
-- [ ] 視需要提供 `drop_chunks` 的包裝函式，免去手動轉型
-- [ ] 沒有安裝 TimescaleDB 時給出清楚的錯誤訊息（擴充本身不依賴 TimescaleDB）
-- [ ] 測試（需要 TimescaleDB 的測試環境）與 TIMESCALEDB.md 更新
+- [x] `nanotime_timescale_setup(tbl regclass, col name, chunk nanointerval DEFAULT '1 day', migrate_data bool DEFAULT false)`：一次完成建立 hypertable（三種型別都用對應的分區函數）、`set_integer_now_func` 與補上 `(ts DESC)` 索引（已有等效索引時沿用）
+- [x] `nanotime_drop_chunks(tbl, older_than nanotimestamptz, newer_than nanotimestamptz)`：免去手動轉型
+- [x] 沒有安裝 TimescaleDB 時給出清楚的錯誤訊息（擴充本身不依賴 TimescaleDB，用動態 SQL 呼叫；回歸測試 `timescale_missing`）
+- [x] 測試（選用測試 `timescale`，TimescaleDB 2.31.0、PG 17.11／18.6 通過）與 TIMESCALEDB.md 更新；案例 7「工廠感測器」補上一鍵設定一節
 
 ### 之後再評估（有人需要再做）
 

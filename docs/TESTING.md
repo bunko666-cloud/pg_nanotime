@@ -49,7 +49,8 @@ make installcheck WITH_TIMESCALEDB=1 ...
 | `monotonic` | `clock_ns_monotonic`：20 萬次呼叫嚴格遞增、模擬時鐘倒退 2 秒、監控計數、權限、`nanotime.clock_source` |
 | `global` | `clock_ns_global`：有 preload 時（`global.out`）測 20 萬次嚴格遞增；沒有 preload 時（`global_1.out`）測錯誤訊息 |
 | `range`（0.3.0） | `nanotstzrange`／`nanotsrange`／multirange：I/O、奈秒邊界的相鄰與重疊、只差 1 ns 的範圍、聯集／交集／差集、`range_agg`、subtype_diff 精度、COPY binary、`EXCLUDE USING gist` 擋下只重疊 1 ns 的預約、GiST 計畫、B-tree／hash |
-| `timescale`（選用） | 分區映射的飽和、`ns()`、`nanotime_now_int8`、16 B 與 8 B hypertable、排除 chunk、drop_chunks、保留策略 |
+| `timescale_missing`（0.3.0） | 沒有 TimescaleDB 時 `nanotime_timescale_setup`／`nanotime_drop_chunks` 的錯誤與提示；兩個函式不依賴其他擴充 |
+| `timescale`（選用） | 分區映射的飽和、`ns()`、`nanotime_now_int8`、16 B 與 8 B hypertable、排除 chunk、drop_chunks、保留策略；0.3.0：一鍵設定三種型別、chunk 與 `(t DESC)` 索引（含沿用既有索引）、`ORDER BY t DESC LIMIT` 走索引、保留策略、`nanotime_drop_chunks`（含原生 8 B 維度與 1677 年以前的邊界）、錯誤情況 |
 
 ### 結果
 
@@ -61,6 +62,7 @@ make installcheck WITH_TIMESCALEDB=1 ...
 | Phase 2 完成（11 個） | 3 次 11/11 | 3 次 11/11 |
 | Phase 3（14 個，含 timescale，有 preload） | 3 次 14/14 | 3 次 14/14 |
 | 0.3.0 範圍型別（18 個，有 preload，不含 timescale；2026-10-26） | 1 次 18/18 | 1 次 18/18 |
+| 0.3.0 TimescaleDB 一鍵設定（20 個，含 timescale，TimescaleDB 2.31.0，有 preload；2026-10-26） | 1 次 20/20 | 1 次 20/20 |
 
 `global_1.out`（沒有 preload）只在 PG 18 實際產生並比對過。
 
@@ -126,6 +128,19 @@ pg_nanotime 的對應做法：所有輸入、轉型、算術超出範圍時都�
 需要連續聚合時，請把時間另外存成 bigint 欄位。完整用法見 [TIMESCALEDB.md](TIMESCALEDB.md)。
 
 分區函數邊界（ns16 原型）：輸入低於 1677 下界 1 ns 時輸出 INT64_MIN，高於 2262 上界 1 ns 時輸出 INT64_MAX。西元 1 年與 9999 年分別飽和到兩端。各 100 萬筆隨機值排序後比對，遞減次數都是 0。正式版的 `nanotime_part` 在 `timescale` 回歸測試中驗證了相同的邊界。
+
+補充（2026-10-26，TimescaleDB 2.31.0、PG 17.11 與 18.6）：不設分區函數的 8 B hypertable，`add_retention_policy` 可以建立，但用 `run_job` 執行時報 `interval field value out of range: "86400000000000"`；設了 `nanotime_part8` 與 `set_integer_now_func` 後保留策略正常刪除。
+
+### 一鍵設定 `nanotime_timescale_setup`（0.3.0，TimescaleDB 2.31.0、PG 17.11 與 18.6）
+
+由 `timescale` 回歸測試驗證（各跑 1 次，20/20 通過）：
+
+- 三種型別各建一張表：分區函數分別是 `nanotime_part`／`nanotime_part_notz`／`nanotime_part8`，chunk 間隔與 `integer_now_func` 正確寫入 TimescaleDB 目錄。
+- 4320 列（3 天）→ 3 個 chunk，每個 chunk 只有 `(t DESC)` 一個索引；`ORDER BY t DESC LIMIT 3` 的計畫走索引、沒有 Sort／Seq Scan，範圍查詢也走索引。已有 `(t)` 索引的表沿用既有索引。
+- `nanotime_drop_chunks`：`older_than`、`newer_than` 各刪 1 個 chunk；早於 1677 年的 `older_than` 回傳 0 列、不報錯；原生 8 B 維度（手動 `by_range`）也能刪；`add_retention_policy` + `run_job` 刪光過期資料。
+- 錯誤：已經是 hypertable、型別不符、欄位不存在、chunk 為 0、不是 hypertable、表非空（TimescaleDB 的錯誤與提示），`migrate_data => true` 可處理非空表。
+- 沒有 TimescaleDB 的錯誤路徑在一般測試 `timescale_missing`（CI 的 PG17／18 job 都會跑）。
+- 案例 7 頁面另以 100 萬列在 PG 18.6 重跑：一分鐘範圍查詢為 Index Scan，`ORDER BY ts DESC LIMIT 5` 只打開 1 個 chunk 並走 `readings_ts_idx`。
 
 ## 5. 效能基準測試
 

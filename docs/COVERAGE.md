@@ -1,6 +1,6 @@
 # pg_nanotime 功能與測試涵蓋表（COVERAGE）
 
-這份文件把 pg_nanotime 的所有物件（型別、函式、轉型、運算子、聚合、索引 opclass、GUC）和「已經驗證過的測試」整理在一起。整理日期：2026-10-23（Asia/Taipei），對應 0.2.0 版本；2026-10-26 加入 0.3.0（尚未釋出）的範圍型別 `nanotstzrange`／`nanotsrange`。
+這份文件把 pg_nanotime 的所有物件（型別、函式、轉型、運算子、聚合、索引 opclass、GUC）和「已經驗證過的測試」整理在一起。整理日期：2026-10-23（Asia/Taipei），對應 0.2.0 版本；2026-10-26 加入 0.3.0（尚未釋出）的範圍型別 `nanotstzrange`／`nanotsrange` 與 TimescaleDB 一鍵設定函式。
 
 ## 1. 用途與用法
 
@@ -16,7 +16,7 @@
 | 類別 | 數量 | 說明 |
 |---|---:|---|
 | 型別 | 8（+8 個陣列型別） | `nanotimestamptz`、`nanotimestamptz8`、`nanotimestamp`、`nanointerval`；0.3.0 新增範圍型別 `nanotstzrange`、`nanotsrange` 與自動建立的 `nanotstzmultirange`、`nanotsmultirange` |
-| 函式（`CREATE FUNCTION`） | 159 + 2 | 對使用者的 42 個；轉型函式 20 個；其餘 97 個是 I/O、比較、運算子實作、聚合支援等內部函式；0.3.0 新增 2 個 subtype_diff（`nanotimestamptz_subdiff`、`nanotimestamp_subdiff`） |
+| 函式（`CREATE FUNCTION`） | 159 + 4 | 對使用者的 42 個；轉型函式 20 個；其餘 97 個是 I/O、比較、運算子實作、聚合支援等內部函式；0.3.0 新增 2 個 subtype_diff（`nanotimestamptz_subdiff`、`nanotimestamp_subdiff`）與 2 個 TimescaleDB 輔助（`nanotime_timescale_setup`、`nanotime_drop_chunks`） |
 | 範圍型別自動建立的建構函式 | 10 | `nanotstzrange(a,b[,text])`、`nanotsrange(a,b[,text])`、`nanotstzmultirange(…)` 與 `nanotsmultirange(…)` 各 3 個（0.3.0） |
 | 程序（`CREATE PROCEDURE`） | 1 | `nanotime_migrate_column` |
 | 聚合 | 10 | 4 型別各 `min`/`max`，加上 `sum(nanointerval)`、`avg(nanointerval)` |
@@ -25,7 +25,7 @@
 | 運算子類別（opclass） | 11 | B-tree 4、hash 4、BRIN minmax 3；另有 11 個隨之建立的 operator family |
 | GUC | 2 | `nanotime.clock_source`、`nanotime.debug_clock_offset_us` |
 
-交叉核對：0.3.0 擴充套件相依的物件共 303 個（`pg_depend`，與 `\dx+ pg_nanotime` 的 303 行一致，PG 17.11 與 18.6 相同）= 型別 16 + 函式／程序／聚合 182 + 運算子／opclass／operator family 79 + 轉型 26。0.2.0 是 281 個（型別 8、函式／程序／聚合 170、運算子類 79、轉型 24）。範圍運算子（`&&`、`@>` 等）與 GiST `range_ops` 是 PostgreSQL 內建的多型物件，不屬於擴充套件。
+交叉核對：0.3.0 擴充套件相依的物件共 305 個（`pg_depend`，與 `\dx+ pg_nanotime` 的 305 行一致，PG 17.11 與 18.6 相同）= 型別 16 + 函式／程序／聚合 184 + 運算子／opclass／operator family 79 + 轉型 26。0.2.0 是 281 個（型別 8、函式／程序／聚合 170、運算子類 79、轉型 24）。範圍運算子（`&&`、`@>` 等）與 GiST `range_ops` 是 PostgreSQL 內建的多型物件，不屬於擴充套件。
 
 ### 驗證版本的寫法
 
@@ -86,6 +86,8 @@ I/O（文字與 binary send/recv）：io（16 B）、compact（8 B）、notz、i
 | `nanotime_part_notz(nanotimestamp)` | 無時區版本 | timescale | 同上 | — | |
 | `ns(nanointerval)` | → bigint，給 chunk 間隔等參數 | timescale | 同上 | 7, 教 | |
 | `nanotime_now_int8()` | 給 `set_integer_now_func` | timescale | 同上 | 7, 教 | 需要 `partition_func` |
+| `nanotime_timescale_setup(regclass, name, nanointerval, bool)` | 一鍵建立 hypertable：依型別選分區函數、chunk 轉奈秒、設 integer now、補 `(col DESC)` 索引（有等效索引就沿用） | timescale（成功路徑、計畫、錯誤）、timescale_missing（沒有 TimescaleDB） | timescale：TimescaleDB 2.31.0 + PG 17.11／18.6（本機）與 CI 選用 job；timescale_missing：PG17/18，**0.3.0** | 7 | 需要 TimescaleDB 2.13+ 的 `by_range()`；8 B 也用 `nanotime_part8`（原生維度保留策略會失敗）；不建 TimescaleDB 預設索引 |
+| `nanotime_drop_chunks(regclass, nanotimestamptz, nanotimestamptz)` | `drop_chunks` 包裝，直接給奈秒時間 | timescale、timescale_missing | 同上，**0.3.0** | 7 | 讀 `_timescaledb_catalog.dimension`（內部目錄）；無時區表依 session 時區換算；早於 int64 下限回傳空集合 |
 
 ### 範圍型別（0.3.0）
 
@@ -171,7 +173,7 @@ I/O（文字與 binary send/recv）：io（16 B）、compact（8 B）、notz、i
 | 4 | 網站變慢了 | `nanointerval`、`nanointerval_from_ns` |
 | 5 | 交易延遲 | `nanotimestamptz8`、`time_bucket_ns`、`percentile_disc`、B-tree 範圍查詢 |
 | 6 | 分散式排序 | `clock_ns8_global()`、bumps、lead、commit 順序 |
-| 7 | 工廠感測器 | hypertable、`nanotime_part8`、ts 索引、BRIN、`drop_chunks ::bigint`、保留策略 |
+| 7 | 工廠感測器 | hypertable、`nanotime_part8`、ts 索引、BRIN、`drop_chunks ::bigint`、保留策略、`nanotime_timescale_setup`／`nanotime_drop_chunks`（0.3.0，TimescaleDB 2.31.0） |
 | 8 | timestamp9 搬家 | `nanotime_migrate_column`、dry_run、`nanotime_suspect_count`、new_default |
 | 9 | 網路封包 | `nanotimestamp`、`abs(nanointerval)`（0.2.0）、`percentile_disc` 直接用在 nanointerval、`timezone()` |
 | 10 | 科學實驗 | `nanotime.clock_source = tai`、閏秒、拒絕月份 |
@@ -193,7 +195,7 @@ I/O（文字與 binary send/recv）：io（16 B）、compact（8 B）、notz、i
 | 16 B 佈局與 COPY（§6） | 佈局比較 | PG18 | 改儲存格式 |
 | 遷移（§7） | 真實 timestamp9 20 萬列 + 邊界值、3 個索引、逐列比對 | PG18 | 改 `nanotime_migrate_column` |
 | 嚴格遞增時鐘並行測試（§8） | 多連線 global 時鐘 | PG17/18 | 改 monotonic／global 實作 |
-| 升級一致性 | 0.1.0 → 0.3.0、0.2.0 → 0.3.0 的 `\dx+` 與全新安裝相同（303 行） | CI（PG17/18）、本機 PG17.11／18.6（2026-10-26） | 每次改升級腳本（CI 自動檢查） |
+| 升級一致性 | 0.1.0 → 0.3.0、0.2.0 → 0.3.0 的 `\dx+` 與全新安裝相同（305 行；TimescaleDB 輔助函式的原始碼 md5 也相同） | CI（PG17/18）、本機 PG17.11／18.6（2026-10-26） | 每次改升級腳本（CI 自動檢查） |
 | 文件範例一致性 | `docs/EXAMPLES.md` 與 `examples` 測試逐行一致 | CI「Docs examples」、`make check-docs` | 改 EXAMPLES 或 examples 測試（CI 自動） |
 
 ### CI
@@ -224,8 +226,9 @@ CI 的 `paths-ignore` 排除 `**.md` 與 `docs/**`，只改文件時不會觸發
 - **單一時間點沒有 GiST／GIN opclass**（時段請用 0.3.0 的範圍型別，走內建 GiST `range_ops`），BRIN 只有 minmax（沒有 minmax-multi、bloom），nanointerval 沒有 BRIN。int8 的 opclass 也不能借給 `nanotimestamptz8` 用。
 - **TimescaleDB 連續聚合不支援**這些型別（也不支援自訂分區函數）；需要時另存 bigint 欄位。`time_bucket` 不接受這些型別，請用 `time_bucket_ns` 或 `time_bucket(bigint, t::bigint)`。
 - **`percentile_cont` 不支援 nanointerval**（需要內插）；`percentile_disc` 可以直接用。
-- **`drop_chunks` 要 `::bigint`**：設了 `partition_func` 的 hypertable，`older_than` 必須是 bigint；沒設的 8 B hypertable 可直接給 `nanotimestamptz8`。
-- **TimescaleDB 索引陷阱**：設了 `partition_func` 時預設索引建在 `nanotime_part8(ts)` 運算式上，以 `ts` 查詢用不到，請另建 `(ts DESC)`。
+- **`drop_chunks` 要 `::bigint`**：設了 `partition_func` 的 hypertable，`older_than` 必須是 bigint；沒設的 8 B hypertable 可直接給 `nanotimestamptz8`。0.3.0 的 `nanotime_drop_chunks` 會自動換算。
+- **TimescaleDB 索引陷阱**：設了 `partition_func` 時預設索引建在 `nanotime_part8(ts)` 運算式上，以 `ts` 查詢用不到，請另建 `(ts DESC)`。0.3.0 的 `nanotime_timescale_setup` 會自動處理。
+- **原生 8 B 維度的保留策略**：`add_retention_policy` 建得起來，但執行時報 `interval field value out of range`（TimescaleDB 2.31.0），要用保留策略請設 `nanotime_part8`。
 - **隱式 `timestamptz → nanotimestamptz`**：方便沿用既有資料，但擴充套件不會阻止混用 `now()` 與奈秒欄位；這是使用慣例。
 - **不帶型別的 `'1 day'`** 會被解析成內建 interval（日曆語意、µs 精度）；固定長度要寫 `::nanointerval`。
 - **`smallint * nanointerval`** 會 operator is not unique，請先轉 int。
@@ -248,6 +251,7 @@ CI 的 `paths-ignore` 排除 `**.md` 與 `docs/**`，只改文件時不會觸發
 | 時鐘（clock／monotonic／global、GUC） | clocks, monotonic, global（有 preload 與沒有 preload 兩次）, compact；TESTING §5 時鐘成本、§8 並行 | I/O、遷移 |
 | 轉型 | casts, compact, notz, interval, migrate | 時鐘 |
 | 分區函數、`ns()`、`nanotime_now_int8` | timescale（`WITH_TIMESCALEDB=1`）；TESTING §4 | 其他 |
+| `nanotime_timescale_setup`／`nanotime_drop_chunks` | timescale（`WITH_TIMESCALEDB=1`，實際 TimescaleDB）、timescale_missing；升級一致性 | 時鐘、遷移、範圍型別 |
 | 遷移程序／函式 | migrate, examples；真實 timestamp9 20 萬列（TESTING §7，PG18） | 其他 |
 | 安裝／升級腳本 | 全部 `installcheck`（PG17、18，重啟叢集）、升級後 `\dx+` 與全新安裝一致 | — |
 | 範圍型別或 subtype_diff | range, examples；升級一致性 | 時鐘、遷移、TimescaleDB |
