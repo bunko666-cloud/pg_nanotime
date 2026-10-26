@@ -21,7 +21,7 @@
             "PostgreSQL": "17.0.0"
          },
          "recommends": {
-            "timescaledb": "2.0.0"
+            "timescaledb": "2.13.0"
          }
       }
    },

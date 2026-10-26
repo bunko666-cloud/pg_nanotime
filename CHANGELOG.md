@@ -4,7 +4,9 @@
 
 ## [Unreleased]
 
-預定版本 0.3.0（尚未釋出）。從 0.2.0 升級：`ALTER EXTENSION pg_nanotime UPDATE TO '0.3.0';`。
+## [0.3.0] - 2026-10-26
+
+升級：`ALTER EXTENSION pg_nanotime UPDATE TO '0.3.0';`（0.1.0 與 0.2.0 都可以直接升級；只支援 PostgreSQL 17 與 18）。
 
 ### 新增
 - 範圍型別 `nanotstzrange`（子型別 `nanotimestamptz`）與 `nanotsrange`（子型別 `nanotimestamp`），用 PostgreSQL 的 `CREATE TYPE ... AS RANGE` 定義；multirange 型別 `nanotstzmultirange`、`nanotsmultirange` 自動建立。內建的範圍運算子（`&&`、`@>`、`<@`、`-|-`、`<<`、`>>`、`+`、`*`、`-` 等）、`lower`／`upper`／`isempty`、`range_agg`、`range_intersect_agg`、GiST 索引與 `EXCLUDE USING gist`（搭配 `btree_gist`）都可直接使用，不另外自訂運算子。

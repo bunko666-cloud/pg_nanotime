@@ -1,6 +1,6 @@
 # pg_nanotime 發展規劃（Roadmap）
 
-整理日期：2026-10-26（Asia/Taipei）。目前版本：0.2.0（已發布到 GitHub 與 [PGXN](https://pgxn.org/dist/pg_nanotime/)）；0.3.0 的範圍型別與 TimescaleDB 一鍵設定已完成、尚未釋出。
+整理日期：2026-10-26（Asia/Taipei）。目前版本：0.3.0（2026-10-26 發布到 GitHub 與 [PGXN](https://pgxn.org/dist/pg_nanotime/)；範圍型別與 TimescaleDB 一鍵設定）。
 
 這份文件記錄「接下來要做什麼、為什麼這樣排、哪些決定不做」，讓之後接手的人（包括未來的自己）不必重新討論一次。每完成一項，就在清單上打勾，並同步更新 [CHANGELOG.md](../CHANGELOG.md) 和 [COVERAGE.md](COVERAGE.md)。
 

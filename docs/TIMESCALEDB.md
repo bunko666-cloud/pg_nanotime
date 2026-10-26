@@ -2,7 +2,7 @@
 
 以下用法都在 TimescaleDB 2.31.0、PG 17.11 與 18.6 上測試過（回歸測試 `timescale`）。
 
-## 一鍵設定（0.3.0，尚未釋出）
+## 一鍵設定（0.3.0）
 
 `nanotime_timescale_setup(表, 欄位, chunk 長度 DEFAULT '1 day', migrate_data DEFAULT false)` 一次做完下面「範例一／範例二」的手動步驟：
 

@@ -108,7 +108,7 @@ CALL nanotime_migrate_column('events', 't', 'nanotimestamptz8'); -- 或指定目
 
 ## 8. TimescaleDB 基本用法
 
-0.3.0（尚未釋出）起，一個函式就能設定好：
+0.3.0 起，一個函式就能設定好：
 
 ```sql
 CREATE TABLE ticks (ts nanotimestamptz8 NOT NULL, price numeric);
@@ -138,7 +138,7 @@ SELECT create_hypertable('ticks', by_range('ts', ns('1 day')));
 
 ## 9. 時段不能重疊：預約與量測視窗（`nanotstzrange`，0.3.0）
 
-> 0.3.0 尚未釋出；從 0.2.0 升級用 `ALTER EXTENSION pg_nanotime UPDATE TO '0.3.0';`。設計細節見 [TECHNICAL.md 的範圍型別](TECHNICAL.md#範圍型別-nanotstzrangenanotsrange030)。
+> 0.3.0 新增；從 0.2.0 升級用 `ALTER EXTENSION pg_nanotime UPDATE TO '0.3.0';`。設計細節見 [TECHNICAL.md 的範圍型別](TECHNICAL.md#範圍型別-nanotstzrangenanotsrange030)。
 
 會議室被兩個人同時訂走，是辦公室裡很常見的小災難。與其在程式裡先查再寫（兩個人同時按下去還是會撞），不如讓資料庫直接擋下來：
 

@@ -1,6 +1,6 @@
 # pg_nanotime 功能與測試涵蓋表（COVERAGE）
 
-這份文件把 pg_nanotime 的所有物件（型別、函式、轉型、運算子、聚合、索引 opclass、GUC）和「已經驗證過的測試」整理在一起。整理日期：2026-10-23（Asia/Taipei），對應 0.2.0 版本；2026-10-26 加入 0.3.0（尚未釋出）的範圍型別 `nanotstzrange`／`nanotsrange` 與 TimescaleDB 一鍵設定函式。
+這份文件把 pg_nanotime 的所有物件（型別、函式、轉型、運算子、聚合、索引 opclass、GUC）和「已經驗證過的測試」整理在一起。整理日期：2026-10-23（Asia/Taipei），對應 0.2.0 版本；2026-10-26 更新為 0.3.0 版本（加入範圍型別 `nanotstzrange`／`nanotsrange` 與 TimescaleDB 一鍵設定函式）。
 
 ## 1. 用途與用法
 
@@ -30,7 +30,7 @@
 ### 驗證版本的寫法
 
 - **回歸測試**：除非另外註明，全部在 PG 17.11 與 18.6 通過（本機 `installcheck` 與 CI 的 PostgreSQL 17、18 兩個 job）。`timescale` 測試在 CI 的「TimescaleDB on PostgreSQL 17/18（optional）」job 執行（TimescaleDB 2.x）。
-- **起始版本**：除非標 0.2.0 或 0.3.0，都是 0.1.0 就有。0.3.0 尚未釋出。
+- **起始版本**：除非標 0.2.0 或 0.3.0，都是 0.1.0 就有。0.3.0 於 2026-10-26 釋出。
 - **案例**：數字是 [案例目錄](#8-案例頁與教學涵蓋) 的編號，「教」= 教學頁。案例頁只在 PG 18.6 上執行。
 
 ## 2. 型別

@@ -2,7 +2,7 @@
 
 PostgreSQL 奈秒精度時間戳擴充套件，靈感來自 [timestamp9](https://github.com/optiver/timestamp9)，並在此基礎上進一步發展。授權：PostgreSQL License。
 
-> 狀態：**v0.2.0 已釋出（2026-10-23，Phase 1–4 完成）**；0.3.0（範圍型別）開發中、尚未釋出。原始碼：[https://github.com/bunko666-cloud/pg_nanotime](https://github.com/bunko666-cloud/pg_nanotime)。[![CI](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml/badge.svg)](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml) [English summary](#english)
+> 狀態：**v0.3.0 已釋出（2026-10-26；範圍型別、TimescaleDB 一鍵設定）**。原始碼：[https://github.com/bunko666-cloud/pg_nanotime](https://github.com/bunko666-cloud/pg_nanotime)。[![CI](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml/badge.svg)](https://github.com/bunko666-cloud/pg_nanotime/actions/workflows/ci.yml) [English summary](#english)
 >
 > **只支援 PostgreSQL 17 與 18**（已在 17.11、18.6 上建置並通過全部回歸測試）。PG 16 以下會在建置時直接報錯：Makefile 會檢查 `pg_config --version`，原始碼也有 `#error`。程式中沒有任何舊版相容碼。
 >
@@ -255,7 +255,7 @@ make installcheck PGHOST=/tmp PGPORT=5432 PGUSER=postgres
 
 `ns(nanointerval)`、`nanotime_now_int8()`、`nanotime_part()`、`nanotime_part_notz()`、`nanotime_part8()`。用法範例見 **[docs/TIMESCALEDB.md](TIMESCALEDB.md)**。
 
-0.3.0（尚未釋出）新增兩個一鍵輔助函式：
+0.3.0 新增兩個一鍵輔助函式：
 
 | 函式 | 做什麼 |
 |---|---|
@@ -272,7 +272,7 @@ make installcheck PGHOST=/tmp PGPORT=5432 PGUSER=postgres
 
 ## 範圍型別 `nanotstzrange`／`nanotsrange`（0.3.0）
 
-> 0.3.0 尚未釋出（記錄在 CHANGELOG 的 [Unreleased]）。從 0.2.0 升級：`ALTER EXTENSION pg_nanotime UPDATE TO '0.3.0';`
+> 0.3.0 於 2026-10-26 釋出（見 CHANGELOG 的 [0.3.0]）。從 0.2.0 升級：`ALTER EXTENSION pg_nanotime UPDATE TO '0.3.0';`
 
 「這段時間有沒有和別人重疊」是很常見的問題：會議室、實驗室儀器、GPU、直播時段都不能重複預約。PostgreSQL 內建的 `tstzrange` 只到微秒，pg_nanotime 0.3.0 用 PostgreSQL 的 `CREATE TYPE ... AS RANGE` 機制，提供奈秒精度的範圍型別：
 
@@ -328,7 +328,7 @@ pg_nanotime is a PostgreSQL 17/18 extension providing nanosecond timestamps, ins
   - The clock is selected with `nanotime.clock_source = realtime | tai`.
   - `nanotime_clock_status()` reports clock regressions and drift.
 - **Migration**: `nanotime_migrate_column()` converts timestamp9, bigint ns, timestamptz and timestamp columns in a single `ALTER TABLE`, rebuilding indexes.
-- **TimescaleDB**: `ns()`, `nanotime_now_int8()`, `nanotime_part*()`; 0.3.0 (unreleased) adds `nanotime_timescale_setup()` (hypertable + integer-now + `(col DESC)` index in one call) and `nanotime_drop_chunks()` (nanotimestamptz bounds). pg_nanotime does not depend on TimescaleDB; both call it through dynamic SQL. See docs/TIMESCALEDB.md.
-- **Range types (0.3.0, unreleased)**: `nanotstzrange` / `nanotsrange` and their multiranges, built with `CREATE TYPE ... AS RANGE`. All built-in range operators, `range_agg`, GiST indexes and `EXCLUDE USING gist` work. They are continuous like `tstzrange` (no canonical function; prefer `[start, end)`), and subtype_diff returns seconds as float8, like `tstzrange_subdiff`.
+- **TimescaleDB**: `ns()`, `nanotime_now_int8()`, `nanotime_part*()`; 0.3.0 adds `nanotime_timescale_setup()` (hypertable + integer-now + `(col DESC)` index in one call) and `nanotime_drop_chunks()` (nanotimestamptz bounds). pg_nanotime does not depend on TimescaleDB; both call it through dynamic SQL. See docs/TIMESCALEDB.md.
+- **Range types (0.3.0)**: `nanotstzrange` / `nanotsrange` and their multiranges, built with `CREATE TYPE ... AS RANGE`. All built-in range operators, `range_agg`, GiST indexes and `EXCLUDE USING gist` work. They are continuous like `tstzrange` (no canonical function; prefer `[start, end)`), and subtype_diff returns seconds as float8, like `tstzrange_subdiff`.
 
 Install with `make && sudo make install` (PGXS), then `CREATE EXTENSION pg_nanotime;`. Run the tests with `make installcheck`. Detailed docs are in Traditional Chinese; test results, with real measured numbers, are in docs/TESTING.md. License: PostgreSQL.
