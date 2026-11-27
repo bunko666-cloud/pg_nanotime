@@ -59,5 +59,8 @@ SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY d)::bigint
      = percentile_disc(0.5) WITHIN GROUP (ORDER BY d::bigint) AS matches_bigint
 FROM lat;
 -- percentile_cont needs interpolation: not supported
+\set VERBOSITY sqlstate
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY d) FROM lat;
+\echo :LAST_ERROR_MESSAGE
+\set VERBOSITY default
 DROP TABLE lat;

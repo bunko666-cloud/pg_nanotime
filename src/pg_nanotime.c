@@ -16,6 +16,7 @@
  * Copyright (c) 2026, pg_nanotime contributors. PostgreSQL License.
  */
 #include "postgres.h"
+#include "access/htup_details.h"
 
 #include <time.h>
 #include <ctype.h>

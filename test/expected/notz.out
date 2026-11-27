@@ -69,8 +69,8 @@ SELECT min(t), max(t), count(DISTINCT t) FROM l;
 (1 row)
 
 CREATE INDEX l_b ON l(t);
-CREATE INDEX l_h ON l USING hash(t);
 SET enable_seqscan = off;
+SET enable_indexscan = off;
 EXPLAIN (COSTS OFF) SELECT count(*) FROM l WHERE t < '1970-01-01';
                                    QUERY PLAN                                   
 --------------------------------------------------------------------------------
@@ -87,6 +87,8 @@ SELECT count(*) FROM l WHERE t < '1970-01-01';
     60
 (1 row)
 
+DROP INDEX l_b;
+CREATE INDEX l_h ON l USING hash(t);
 EXPLAIN (COSTS OFF) SELECT count(*) FROM l WHERE t = '1969-12-31 23:59:01.000000007';
                                    QUERY PLAN                                   
 --------------------------------------------------------------------------------
@@ -103,7 +105,7 @@ SELECT count(*) FROM l WHERE t = '1969-12-31 23:59:01.000000007';
      1
 (1 row)
 
-DROP INDEX l_b; DROP INDEX l_h;
+DROP INDEX l_h;
 CREATE INDEX l_brin ON l USING brin(t);
 EXPLAIN (COSTS OFF) SELECT count(*) FROM l WHERE t < '1970-01-01';
                                    QUERY PLAN                                   
@@ -121,6 +123,7 @@ SELECT count(*) FROM l WHERE t < '1970-01-01';
     60
 (1 row)
 
+RESET enable_indexscan;
 RESET enable_seqscan;
 -- casts: timestamp (floor), date, nanotimestamptz via session zone, bigint (explicit)
 SELECT '1969-12-31 23:59:59.999999999'::nanotimestamp::timestamp, timestamp '2024-01-01 00:00:00.5'::nanotimestamp;
@@ -202,11 +205,12 @@ SELECT timezone('-05:00', '2024-06-01 00:00:00.5'::nanotimestamp)::text = (times
  t
 (1 row)
 
+\set VERBOSITY sqlstate
 SELECT '2024-01-01'::nanotimestamp AT TIME ZONE 'UTC';
-ERROR:  function pg_catalog.timezone(unknown, nanotimestamp) does not exist
-LINE 1: SELECT '2024-01-01'::nanotimestamp AT TIME ZONE 'UTC';
-                                           ^
-HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+ERROR:  42883
+\echo :LAST_ERROR_MESSAGE
+function pg_catalog.timezone(unknown, nanotimestamp) does not exist
+\set VERBOSITY default
 -- arithmetic
 SELECT '2024-01-02'::nanotimestamp - '2024-01-01 00:00:00.000000001'::nanotimestamp, '1969-12-31 23:59:59.999999999'::nanotimestamp - '1970-01-01'::nanotimestamp;
       ?column?      |      ?column?       
