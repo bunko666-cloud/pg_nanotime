@@ -174,9 +174,10 @@ FROM lat;
 (1 row)
 
 -- percentile_cont needs interpolation: not supported
+\set VERBOSITY sqlstate
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY d) FROM lat;
-ERROR:  function percentile_cont(numeric, nanointerval) does not exist
-LINE 1: SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY d) FROM l...
-               ^
-HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+ERROR:  42883
+\echo :LAST_ERROR_MESSAGE
+function percentile_cont(numeric, nanointerval) does not exist
+\set VERBOSITY default
 DROP TABLE lat;

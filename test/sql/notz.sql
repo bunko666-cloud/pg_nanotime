@@ -18,16 +18,19 @@ CREATE TEMP TABLE l(t nanotimestamp);
 INSERT INTO l SELECT '1969-12-31 23:59:00'::nanotimestamp + (g::bigint * 1000000007)::nanointerval FROM generate_series(0, 9999) g;
 SELECT min(t), max(t), count(DISTINCT t) FROM l;
 CREATE INDEX l_b ON l(t);
-CREATE INDEX l_h ON l USING hash(t);
 SET enable_seqscan = off;
+SET enable_indexscan = off;
 EXPLAIN (COSTS OFF) SELECT count(*) FROM l WHERE t < '1970-01-01';
 SELECT count(*) FROM l WHERE t < '1970-01-01';
+DROP INDEX l_b;
+CREATE INDEX l_h ON l USING hash(t);
 EXPLAIN (COSTS OFF) SELECT count(*) FROM l WHERE t = '1969-12-31 23:59:01.000000007';
 SELECT count(*) FROM l WHERE t = '1969-12-31 23:59:01.000000007';
-DROP INDEX l_b; DROP INDEX l_h;
+DROP INDEX l_h;
 CREATE INDEX l_brin ON l USING brin(t);
 EXPLAIN (COSTS OFF) SELECT count(*) FROM l WHERE t < '1970-01-01';
 SELECT count(*) FROM l WHERE t < '1970-01-01';
+RESET enable_indexscan;
 RESET enable_seqscan;
 -- casts: timestamp (floor), date, nanotimestamptz via session zone, bigint (explicit)
 SELECT '1969-12-31 23:59:59.999999999'::nanotimestamp::timestamp, timestamp '2024-01-01 00:00:00.5'::nanotimestamp;
@@ -46,7 +49,10 @@ SELECT castcontext, castsource::regtype, casttarget::regtype FROM pg_cast
 -- AT TIME ZONE equivalents
 SELECT timezone('UTC', '2024-01-01 12:00:00.000000001'::nanotimestamp), timezone('America/New_York', '2024-01-01 12:00:00.000000001+00'::nanotimestamptz);
 SELECT timezone('-05:00', '2024-06-01 00:00:00.5'::nanotimestamp)::text = (timestamp '2024-06-01 00:00:00.5' AT TIME ZONE '-05:00')::nanotimestamptz::text AS same_as_core;
+\set VERBOSITY sqlstate
 SELECT '2024-01-01'::nanotimestamp AT TIME ZONE 'UTC';
+\echo :LAST_ERROR_MESSAGE
+\set VERBOSITY default
 -- arithmetic
 SELECT '2024-01-02'::nanotimestamp - '2024-01-01 00:00:00.000000001'::nanotimestamp, '1969-12-31 23:59:59.999999999'::nanotimestamp - '1970-01-01'::nanotimestamp;
 SELECT '2024-01-01'::nanotimestamp + '1 ns'::nanointerval, '1 ns'::nanointerval + '2024-01-01'::nanotimestamp, '2024-01-01'::nanotimestamp - '1 ns'::nanointerval;
